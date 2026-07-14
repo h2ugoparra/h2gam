@@ -16,7 +16,8 @@ select_gam_covariates(
   na_max = 0.3,
   cv_k = 5,
   cv_scheme = "spatial",
-  cv_metric = "euclidean",
+  cv_metric = "haversine",
+  cv_crs = NULL,
   cv_threshold = NULL,
   cv_linkage = "ward",
   knots = NULL,
@@ -65,8 +66,16 @@ on the response; see \code{\link[=make_stratified_folds]{make_stratified_folds()
 low-prevalence (e.g. binomial presence/absence) targets where spatial
 blocks would leave folds with too few positives.}
 
-\item{cv_metric}{SPCV distance: \code{"haversine"} (lon/lat degrees) or
-\code{"euclidean"} (reprojected metres; needs the sf package).}
+\item{cv_metric}{SPCV distance: \code{"haversine"} (the default; great-circle on
+lon/lat degrees, correct anywhere with no projection) or \code{"euclidean"}
+(planar; faster on large n, but see \code{cv_crs}).}
+
+\item{cv_crs}{Only used when \code{cv_metric = "euclidean"}. \code{NULL} (default)
+would compute euclidean distance on raw lon/lat degrees, which is only
+valid near the equator -- so for euclidean pass an sf/PROJ CRS (proj
+string or EPSG code) suited to your study area to reproject first (needs
+the sf package). No study-area projection is assumed; \code{"haversine"} avoids
+the question entirely.}
 
 \item{cv_threshold}{SPCV AHC block threshold (\code{NULL} = 10th percentile of
 pairwise distances).}
