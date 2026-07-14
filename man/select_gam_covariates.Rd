@@ -23,6 +23,7 @@ select_gam_covariates(
   knots = NULL,
   offset = NULL,
   outdir = ".",
+  logfile = "covariate_selection_log.txt",
   seed = 1,
   verbose = TRUE
 )
@@ -92,8 +93,13 @@ mgcv place knots automatically; entries for absent variables are ignored.}
 \item{offset}{Name of an effort column; adds \verb{offset(log(<offset>))} to
 every fit (including family suggestion, so AIC stays comparable).}
 
-\item{outdir}{Directory for the decision-table CSV and diagnostic PNGs
-(created if absent).}
+\item{outdir}{Directory for the decision-table CSV, diagnostic PNGs, and the
+run log (created if absent).}
+
+\item{logfile}{Filename (within \code{outdir}) for a run log that captures all
+the console output; \code{NULL} disables it. Only written when \code{verbose = TRUE}
+(there is nothing to capture otherwise). The sink is unwound on exit, so an
+error mid-run still restores the console.}
 
 \item{seed}{Random seed for fold construction.}
 
@@ -105,10 +111,12 @@ the final model summary.}
 covariate names), \code{family} (chosen family label), \code{decision} (per-candidate
 decision table, also written to \code{covariate_decision_table.csv}), \code{path}
 (forward-selection steps), \code{formula} (final formula as a string),
-\code{dev_expl} (deviance explained), and \code{folds} (integer fold vector).
+\code{dev_expl} (deviance explained), \code{folds} (integer fold vector), and
+\code{logfile} (path to the run log, or \code{NULL} if none was written).
 
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
-\code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png}.
+\code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png},
+and (unless disabled) the run log named by \code{logfile}.
 }
 \description{
 Given a response and a pool of candidate covariates, this:
