@@ -1,0 +1,48 @@
+name: CI
+on:
+  pull_request:
+    branches: [dev, main]
+jobs:
+  commit-lint:
+    name: commit-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate commit messages
+        run: |
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.event.pull_request.head.sha }}'
+          pattern='^(feat|fix|docs|chore|perf|refactor|style|test|build|ci|revert)(\(.+\))?!?: .+'
+          fail=0
+          while IFS= read -r msg; do
+            [ -z "$msg" ] && continue
+            case "$msg" in "Merge "*) continue ;; esac
+            if ! printf '%s' "$msg" | grep -Eq "$pattern"; then
+              echo "::error::Non-conventional commit message: $msg"; fail=1
+            fi
+          done < <(git log --format=%s --no-merges "$base..$head")
+          [ "$fail" -eq 0 ] || { echo "Commit messages must follow Conventional Commits."; exit 1; }
+  branch-name:
+    name: branch-name
+    if: github.base_ref == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch name
+        run: |
+          branch='${{ github.head_ref }}'
+          if ! printf '%s' "$branch" | grep -Eq '^(feature|fix|docs|chore|perf|refactor)/.+'; then
+            echo "::error::Branch '$branch' must start with feature/, fix/, docs/, chore/, perf/, or refactor/."; exit 1
+          fi
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Parse-check R sources
+        run: |
+          Rscript -e 'files <- list.files(pattern = "[.][Rr]$", recursive = TRUE); stopifnot(length(files) > 0); for (f in files) { parse(f); cat("parsed OK:", f, "\n") }'
