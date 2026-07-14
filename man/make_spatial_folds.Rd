@@ -12,6 +12,7 @@ make_spatial_folds(
   k = 10,
   metric = "haversine",
   threshold = NULL,
+  crs = NULL,
   linkage = "average",
   pca_var = 0.95,
   seed = 42,
@@ -26,16 +27,28 @@ make_spatial_folds(
 \item{candidates}{Character vector of covariate names (numeric ones feed the
 stage-2 covariate view; others are ignored).}
 
-\item{coords}{Length-2 character vector naming the longitude and latitude
-columns (in that order). Default \code{c("lon", "lat")}.}
+\item{coords}{Length-2 character vector naming the two coordinate columns
+(x/longitude then y/latitude). Default \code{c("lon", "lat")}. For
+\code{metric = "haversine"} these must be lon/lat degrees; for
+\code{metric = "euclidean"} with \code{crs = NULL} they are taken as already-planar
+coordinates.}
 
 \item{k}{Number of folds.}
 
-\item{metric}{\code{"haversine"} (coordinates in lon/lat degrees) or
-\code{"euclidean"} (coordinates reprojected to metres via the sf package).}
+\item{metric}{\code{"haversine"} (great-circle distance on lon/lat degrees; no
+projection, valid anywhere on the globe) or \code{"euclidean"} (planar
+distance; see \code{crs}). Euclidean uses the C-optimised \code{\link[stats:dist]{stats::dist()}} and
+scales better to large n than the haversine matrix.}
 
-\item{threshold}{AHC cut height: degrees for haversine, metres for
-euclidean. \code{NULL} (default) uses the 10th percentile of pairwise distances.}
+\item{threshold}{AHC cut height: degrees for haversine, projected units
+(e.g. metres) for euclidean. \code{NULL} (default) uses the 10th percentile of
+pairwise distances.}
+
+\item{crs}{Only used when \code{metric = "euclidean"}. \code{NULL} (default) treats
+the \code{coords} columns as already projected. Otherwise an sf/PROJ CRS (a
+proj string or EPSG code) used to reproject lon/lat to a planar system
+before computing distances (needs the sf package). No projection is
+assumed by default, so this function makes no study-area assumption.}
 
 \item{linkage}{AHC linkage method; \code{"ward"} is downgraded to \code{"average"}
 for haversine, where it is invalid.}

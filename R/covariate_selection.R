@@ -229,13 +229,24 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #' @param response Name of the response column (block-mean view for stage 2).
 #' @param candidates Character vector of covariate names (numeric ones feed the
 #'   stage-2 covariate view; others are ignored).
-#' @param coords Length-2 character vector naming the longitude and latitude
-#'   columns (in that order). Default `c("lon", "lat")`.
+#' @param coords Length-2 character vector naming the two coordinate columns
+#'   (x/longitude then y/latitude). Default `c("lon", "lat")`. For
+#'   `metric = "haversine"` these must be lon/lat degrees; for
+#'   `metric = "euclidean"` with `crs = NULL` they are taken as already-planar
+#'   coordinates.
 #' @param k Number of folds.
-#' @param metric `"haversine"` (coordinates in lon/lat degrees) or
-#'   `"euclidean"` (coordinates reprojected to metres via the sf package).
-#' @param threshold AHC cut height: degrees for haversine, metres for
-#'   euclidean. `NULL` (default) uses the 10th percentile of pairwise distances.
+#' @param metric `"haversine"` (great-circle distance on lon/lat degrees; no
+#'   projection, valid anywhere on the globe) or `"euclidean"` (planar
+#'   distance; see `crs`). Euclidean uses the C-optimised [stats::dist()] and
+#'   scales better to large n than the haversine matrix.
+#' @param threshold AHC cut height: degrees for haversine, projected units
+#'   (e.g. metres) for euclidean. `NULL` (default) uses the 10th percentile of
+#'   pairwise distances.
+#' @param crs Only used when `metric = "euclidean"`. `NULL` (default) treats
+#'   the `coords` columns as already projected. Otherwise an sf/PROJ CRS (a
+#'   proj string or EPSG code) used to reproject lon/lat to a planar system
+#'   before computing distances (needs the sf package). No projection is
+#'   assumed by default, so this function makes no study-area assumption.
 #' @param linkage AHC linkage method; `"ward"` is downgraded to `"average"`
 #'   for haversine, where it is invalid.
 #' @param pca_var Fraction of variance retained when the stage-2 covariate
@@ -250,23 +261,31 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #' @export
 make_spatial_folds <- function(data, response, candidates, coords = c("lon", "lat"),
                                k = 10, metric = "haversine", threshold = NULL,
-                               linkage = "average", pca_var = 0.95, seed = 42,
-                               verbose = TRUE) {
-  lon <- data[[coords[1]]]; lat <- data[[coords[2]]]
+                               crs = NULL, linkage = "average", pca_var = 0.95,
+                               seed = 42, verbose = TRUE) {
+  c1 <- data[[coords[1]]]; c2 <- data[[coords[2]]]           # coord 1 (x/lon), coord 2 (y/lat)
 
   # -- Stage 1: AHC -> spatially coherent blocks --------------------------
   if (metric == "haversine") {
-    dmat <- .haversine_dist(lat, lon); d <- stats::as.dist(dmat)
+    dmat <- .haversine_dist(c2, c1); d <- stats::as.dist(dmat)  # (lat, lon) degrees
     link <- if (linkage == "ward") "average" else linkage    # ward invalid for haversine
     thr  <- if (is.null(threshold)) stats::quantile(d, 0.10) else threshold * pi / 180
-    loc  <- cbind(lat, lon)                                  # stage-2 location view (degrees)
+    loc  <- cbind(c2, c1)                                    # stage-2 location view (degrees)
   } else {
-    if (!requireNamespace("sf", quietly = TRUE))
-      stop("metric='euclidean' needs the sf package to reproject lon/lat.")
-    # reproject lon/lat -> Lambert Conformal Conic (metres) so euclidean distance is valid
-    lcc <- "+proj=lcc +lat_1=25 +lat_2=45 +lat_0=35 +lon_0=-25 +datum=WGS84 +units=m +no_defs"
-    loc  <- sf::sf_project(from = "+proj=longlat +datum=WGS84", to = lcc, pts = cbind(lon, lat))
-    d    <- stats::dist(loc, method = "euclidean")           # stage-2 location view (metres)
+    # euclidean distance on PLANAR coordinates. This function assumes no
+    # particular study area: with crs = NULL the given coords are taken as
+    # already projected (project upstream, in whatever CRS fits your region);
+    # pass a crs (an sf/PROJ string or EPSG code) to reproject lon/lat -> that
+    # CRS here. Euclidean distance on raw lon/lat degrees is only valid near
+    # the equator, so no default projection is baked in.
+    if (is.null(crs)) {
+      loc <- cbind(c1, c2)                                   # already planar (metres/units)
+    } else {
+      if (!requireNamespace("sf", quietly = TRUE))
+        stop("make_spatial_folds(crs=...) needs the sf package to reproject lon/lat.")
+      loc <- sf::sf_project(from = "+proj=longlat +datum=WGS84", to = crs, pts = cbind(c1, c2))
+    }
+    d    <- stats::dist(loc, method = "euclidean")           # stage-2 location view (planar)
     link <- linkage
     thr  <- if (is.null(threshold)) stats::quantile(d, 0.10) else threshold
   }
@@ -606,8 +625,15 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   on the response; see [make_stratified_folds()]). Use `"stratified"` for
 #'   low-prevalence (e.g. binomial presence/absence) targets where spatial
 #'   blocks would leave folds with too few positives.
-#' @param cv_metric SPCV distance: `"haversine"` (lon/lat degrees) or
-#'   `"euclidean"` (reprojected metres; needs the sf package).
+#' @param cv_metric SPCV distance: `"haversine"` (the default; great-circle on
+#'   lon/lat degrees, correct anywhere with no projection) or `"euclidean"`
+#'   (planar; faster on large n, but see `cv_crs`).
+#' @param cv_crs Only used when `cv_metric = "euclidean"`. `NULL` (default)
+#'   would compute euclidean distance on raw lon/lat degrees, which is only
+#'   valid near the equator -- so for euclidean pass an sf/PROJ CRS (proj
+#'   string or EPSG code) suited to your study area to reproject first (needs
+#'   the sf package). No study-area projection is assumed; `"haversine"` avoids
+#'   the question entirely.
 #' @param cv_threshold SPCV AHC block threshold (`NULL` = 10th percentile of
 #'   pairwise distances).
 #' @param cv_linkage SPCV AHC linkage (`"ward"` downgraded to `"average"` for
@@ -664,7 +690,8 @@ select_gam_covariates <- function(
     na_max         = 0.30,
     cv_k           = 5,
     cv_scheme      = "spatial",
-    cv_metric      = "euclidean",
+    cv_metric      = "haversine",
+    cv_crs         = NULL,
     cv_threshold   = NULL,
     cv_linkage     = "ward",
     knots          = NULL,
@@ -713,7 +740,7 @@ select_gam_covariates <- function(
     make_stratified_folds(data, response, k = cv_k, seed = seed, verbose = verbose)
   } else {
     make_spatial_folds(data, response, scr$keep, coords = coords, k = cv_k,
-                       metric = cv_metric, threshold = cv_threshold,
+                       metric = cv_metric, threshold = cv_threshold, crs = cv_crs,
                        linkage = cv_linkage, seed = seed, verbose = verbose)
   }
 

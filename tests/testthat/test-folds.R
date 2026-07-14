@@ -35,3 +35,21 @@ test_that("make_spatial_folds (haversine) partitions rows into k spatial folds",
   expect_length(folds, n)
   expect_setequal(unique(folds), 1:4)
 })
+
+test_that("make_spatial_folds (euclidean, crs=NULL) uses planar coords as-is", {
+  set.seed(4)
+  n  <- 200
+  # already-projected coordinates (e.g. metres); no CRS / sf needed
+  df <- data.frame(
+    x  = runif(n, 0, 5e5),
+    y  = runif(n, 0, 5e5),
+    x1 = rnorm(n),
+    z  = rnorm(n)
+  )
+  folds <- make_spatial_folds(df, "z", candidates = "x1", k = 4,
+                              coords = c("x", "y"), metric = "euclidean",
+                              crs = NULL, verbose = FALSE)
+
+  expect_length(folds, n)
+  expect_setequal(unique(folds), 1:4)
+})

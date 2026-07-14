@@ -42,7 +42,7 @@ Each project keeps its own short driver script (data loading, preprocessing, tar
 ## Dependencies
 
 Required: `mgcv` (attached with the package).
-Optional (feature-gated via `Suggests`): `DHARMa` (residual diagnostics in family suggestion), `sf` (the `euclidean` spatial-CV metric, which reprojects lon/lat to metres). The default `haversine` metric needs neither.
+Optional (feature-gated via `Suggests`): `DHARMa` (residual diagnostics in family suggestion), `sf` (only when reprojecting lon/lat for the `euclidean` spatial-CV metric, i.e. when you pass `cv_crs`). The default `haversine` metric, and `euclidean` on already-projected coordinates, need neither.
 
 ## Outputs
 
