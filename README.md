@@ -5,7 +5,7 @@ Automated GAM covariate validation & selection for [mgcv](https://cran.r-project
 Given a response and a pool of candidate covariates, `select_gam_covariates()`:
 
 1. **Profiles the response** and auto-suggests a family (count / proportion / positive / gaussian branches), ranked by AIC + residual diagnostics.
-2. **Forward-selects** a decorrelated, prediction-relevant covariate subset, scored by spatial-block CV skill, with a concurvity gate and a BIC tie-break / 1-SE stopping rule.
+2. **Forward-selects** a decorrelated, prediction-relevant covariate subset, scored by random/spatial-block CV skill, with a concurvity gate and a BIC tie-break / 1-SE stopping rule. Fold construction is set by `cv_scheme`: `"spatial"` (block CV, the default) or `"stratified"` — random k-fold stratified on the response, for binomial / low-prevalence targets where spatial blocks would leave folds with too few positives.
 3. Runs a **bidirectional backward re-check**, a final `select=TRUE` shrinkage fit, and adequacy diagnostics.
 
 Every threshold is a logged, overridable argument; nothing is hardcoded to a particular dataset. Structural (spatial/temporal) terms are forced in and not screened — covariates must earn their place over and above them.
