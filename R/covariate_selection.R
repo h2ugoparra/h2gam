@@ -19,11 +19,6 @@
 # Design decisions and rationale: see the approved plan.
 # =============================================================================
 
-suppressPackageStartupMessages({
-  library(mgcv)
-  library(cluster)
-})
-
 # ---------------------------------------------------------------------------
 # 1. Response profiling & family cascade
 # ---------------------------------------------------------------------------
@@ -219,6 +214,40 @@ make_select_gen <- function(chosen, free_gen, fit) {
   stats::kmeans(U / rn, centers = k, nstart = 10, iter.max = 100)$cluster
 }
 
+#' Spatial-block cross-validation folds (SPCV)
+#'
+#' Two-stage spatial CV (Wang et al. 2023), a faithful R port of the h2ml
+#' `SPCVSplitter`. Stage 1 builds spatially coherent blocks by agglomerative
+#' hierarchical clustering on the coordinates, cut at a distance threshold.
+#' Stage 2 groups the blocks into `k` folds by a cluster ensemble (HBGF):
+#' per-block means of location, covariates, and response are each k-means
+#' clustered, the one-hot memberships are stacked into a co-occurrence
+#' affinity, and spectral clustering assigns folds. Folds are geographically
+#' separated and representative of covariate and label space.
+#'
+#' @param data A data.frame with the coordinate, response, and covariate columns.
+#' @param response Name of the response column (block-mean view for stage 2).
+#' @param candidates Character vector of covariate names (numeric ones feed the
+#'   stage-2 covariate view; others are ignored).
+#' @param coords Length-2 character vector naming the longitude and latitude
+#'   columns (in that order). Default `c("lon", "lat")`.
+#' @param k Number of folds.
+#' @param metric `"haversine"` (coordinates in lon/lat degrees) or
+#'   `"euclidean"` (coordinates reprojected to metres via the sf package).
+#' @param threshold AHC cut height: degrees for haversine, metres for
+#'   euclidean. `NULL` (default) uses the 10th percentile of pairwise distances.
+#' @param linkage AHC linkage method; `"ward"` is downgraded to `"average"`
+#'   for haversine, where it is invalid.
+#' @param pca_var Fraction of variance retained when the stage-2 covariate
+#'   view is compressed by PCA.
+#' @param seed Random seed for the k-means / spectral steps.
+#' @param verbose Print a one-line fold summary.
+#'
+#' @return An integer vector of fold ids (1..k), one per row of `data`.
+#'
+#' @seealso [make_stratified_folds()] for the non-spatial alternative;
+#'   [select_gam_covariates()], which builds these folds internally.
+#' @export
 make_spatial_folds <- function(data, response, candidates, coords = c("lon", "lat"),
                                k = 10, metric = "haversine", threshold = NULL,
                                linkage = "average", pca_var = 0.95, seed = 42,
@@ -275,14 +304,30 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
   as.integer(folds)
 }
 
-# Stratified k-fold folds -- a non-spatial alternative to make_spatial_folds for
-# rare-event responses. SPCV's spatially coherent blocks can leave a fold with
-# zero positives when prevalence is low (~4%), making held-out binomial deviance
-# degenerate. Stratifying on the response spreads the rare positives evenly, so
-# every fold is evaluable. NB: this deliberately drops spatial separation --
-# spatial autocorrelation can leak between train/test, so CV skill is optimistic
-# relative to SPCV; the tradeoff buys stable fold estimates for a rare event.
-# Returns the same integer fold vector (1..k) that forward_select consumes.
+#' Stratified k-fold cross-validation folds
+#'
+#' A non-spatial alternative to [make_spatial_folds()] for rare-event
+#' responses. SPCV's spatially coherent blocks can leave a fold with zero
+#' positives when prevalence is low, making held-out binomial deviance
+#' degenerate. Stratifying on the response spreads the rare positives evenly,
+#' so every fold is evaluable. Strata are the exact label values for a
+#' few-valued response (binary / integer label), else quantile bins so a
+#' continuous response stays balanced too.
+#'
+#' Note this deliberately drops spatial separation -- spatial autocorrelation
+#' can leak between train and test, so CV skill is optimistic relative to
+#' SPCV; the tradeoff buys stable fold estimates for a rare event.
+#'
+#' @param data A data.frame containing the response column.
+#' @param response Name of the response column to stratify on.
+#' @param k Number of folds.
+#' @param seed Random seed for the within-stratum shuffle.
+#' @param verbose Print a one-line fold summary (with per-fold positive counts
+#'   for a binary response).
+#'
+#' @return An integer vector of fold ids (1..k), one per row of `data`.
+#'
+#' @export
 make_stratified_folds <- function(data, response, k = 5, seed = 1, verbose = TRUE) {
   y <- data[[response]]
   # Strata: exact label values for a few-valued response (binary / integer
@@ -512,6 +557,103 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 # 6. Orchestrator
 # ---------------------------------------------------------------------------
 
+#' Automated GAM covariate validation and selection for mgcv
+#'
+#' Given a response and a pool of candidate covariates, this:
+#' 1. profiles the response and auto-suggests a family (count / proportion /
+#'    positive / gaussian branches), ranked by AIC + residual diagnostics;
+#' 2. forward-selects a decorrelated, prediction-relevant covariate subset,
+#'    scored by cross-validated held-out deviance (spatial-block or
+#'    response-stratified folds), with a concurvity gate and a BIC tie-break /
+#'    1-SE stopping rule;
+#' 3. runs a bidirectional backward re-check (BIC), a final `select = TRUE`
+#'    shrinkage fit, and adequacy diagnostics.
+#'
+#' Every threshold is a logged, overridable argument; nothing is hardcoded to
+#' a particular dataset. Structural (spatial/temporal) terms are forced in and
+#' not screened -- covariates must earn their place over and above them.
+#' Random-effect structural terms (`bs = "re"`) are excluded from held-out CV
+#' prediction, matching a deployment `predict(..., exclude = ...)`.
+#'
+#' Search fits use `mgcv::bam(discrete = TRUE)` with the family shape
+#' parameter (Tweedie p / negbin theta) fixed at its structural-only estimate
+#' for speed; the final fit is a free `mgcv::gam(method = "REML")`.
+#'
+#' @param data A data.frame with the response, coordinates, candidate
+#'   covariates, and any variables used by `structural` / `offset`.
+#' @param response Name of the response column.
+#' @param candidates Character vector of candidate covariate names. Each enters
+#'   the model as a `s(<name>)` smooth.
+#' @param structural Character vector of mgcv terms forced into every model
+#'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`.
+#' @param coords Length-2 character vector naming the longitude and latitude
+#'   columns, used for spatial folds and complete-case filtering.
+#' @param family `"auto"` (default) profiles the response and ranks candidate
+#'   families by AIC + residual diagnostics on the structural-only model.
+#'   Alternatively a family object or zero-argument family generator to skip
+#'   the suggestion step.
+#' @param concurvity_max Reject a candidate whose worst pairwise concurvity
+#'   against the already-accepted covariate smooths exceeds this (structural
+#'   terms excluded from the gate).
+#' @param spearman_pre `|Spearman rho|` threshold for the correlation clusters
+#'   reported in the decision table (annotation only; the concurvity gate does
+#'   the actual removal).
+#' @param na_max Drop candidates whose NA/non-finite fraction exceeds this in
+#'   the univariate screen.
+#' @param cv_k Number of CV folds.
+#' @param cv_scheme Fold construction: `"spatial"` (SPCV, the default; see
+#'   [make_spatial_folds()]) or `"stratified"` (non-spatial k-fold stratified
+#'   on the response; see [make_stratified_folds()]). Use `"stratified"` for
+#'   low-prevalence (e.g. binomial presence/absence) targets where spatial
+#'   blocks would leave folds with too few positives.
+#' @param cv_metric SPCV distance: `"haversine"` (lon/lat degrees) or
+#'   `"euclidean"` (reprojected metres; needs the sf package).
+#' @param cv_threshold SPCV AHC block threshold (`NULL` = 10th percentile of
+#'   pairwise distances).
+#' @param cv_linkage SPCV AHC linkage (`"ward"` downgraded to `"average"` for
+#'   haversine).
+#' @param knots mgcv per-smooth knot positions, passed to every `gam()`/`bam()`
+#'   fit. Mainly the cyclic boundary for `s(month, bs='cc')`: pass
+#'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
+#'   instead of collapsing months 1 and 12 onto the same knot. `NULL` lets
+#'   mgcv place knots automatically; entries for absent variables are ignored.
+#' @param offset Name of an effort column; adds `offset(log(<offset>))` to
+#'   every fit (including family suggestion, so AIC stays comparable).
+#' @param outdir Directory for the decision-table CSV and diagnostic PNGs
+#'   (created if absent).
+#' @param seed Random seed for fold construction.
+#' @param verbose Print progress, the family table, the selection path, and
+#'   the final model summary.
+#'
+#' @return (Invisibly) a list: `model` (the final mgcv gam), `kept` (selected
+#'   covariate names), `family` (chosen family label), `decision` (per-candidate
+#'   decision table, also written to `covariate_decision_table.csv`), `path`
+#'   (forward-selection steps), `formula` (final formula as a string),
+#'   `dev_expl` (deviance explained), and `folds` (integer fold vector).
+#'
+#'   Side effects in `outdir`: `covariate_decision_table.csv`,
+#'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`.
+#'
+#' @examples
+#' \donttest{
+#' set.seed(1)
+#' n  <- 400
+#' df <- data.frame(lon = runif(n, -10, 0), lat = runif(n, 35, 45),
+#'                  x1 = rnorm(n), x2 = rnorm(n))
+#' df$y <- sin(df$x1) + 0.1 * df$lon + rnorm(n, sd = 0.3)
+#' res <- select_gam_covariates(
+#'   data       = df,
+#'   response   = "y",
+#'   candidates = c("x1", "x2"),
+#'   structural = "te(lon, lat)",
+#'   cv_k       = 3,
+#'   cv_scheme  = "stratified",
+#'   outdir     = tempdir()
+#' )
+#' res$kept
+#' }
+#'
+#' @export
 select_gam_covariates <- function(
     data, response, candidates,
     structural     = c("s(month, bs='cc')", "s(year, bs='re')", "te(lon, lat)"),
@@ -521,18 +663,11 @@ select_gam_covariates <- function(
     spearman_pre   = 0.7,
     na_max         = 0.30,
     cv_k           = 5,
-    cv_scheme      = "spatial",      # fold construction: "spatial" (SPCV) | "stratified"
-                                    #   "stratified" = non-spatial k-fold stratified on the
-                                    #   response; use for low-prevalence targets where SPCV
-                                    #   leaves folds with too few positives (see make_stratified_folds).
-    cv_metric      = "euclidean",   # SPCV distance: "haversine" (lat/lon deg) | "euclidean"
-    cv_threshold   = NULL,          # AHC block threshold (NULL = 10th pct of pairwise dist)
-    cv_linkage     = "ward",     # AHC linkage ("ward" downgraded to "average" for haversine)
-    knots          = NULL,          # mgcv per-smooth knot positions, passed to every gam()/bam() fit.
-                                    #   Mainly the cyclic boundary for s(month, bs='cc'): pass
-                                    #   list(month = c(0.5, 12.5)) so the 12-month cycle wraps (Dec->Jan)
-                                    #   instead of collapsing month 1 and 12 onto the same knot. NULL lets
-                                    #   mgcv place knots automatically; entries for absent vars are ignored.
+    cv_scheme      = "spatial",
+    cv_metric      = "euclidean",
+    cv_threshold   = NULL,
+    cv_linkage     = "ward",
+    knots          = NULL,
     offset         = NULL,
     outdir         = ".",
     seed           = 1,
@@ -676,68 +811,4 @@ select_gam_covariates <- function(
   invisible(list(model = model, kept = kept, family = fs$chosen,
                  decision = decision, path = fw$path, formula = final_formula,
                  dev_expl = dev_expl, folds = folds))
-}
-
-# =============================================================================
-# Example run (executes only under Rscript, not when sourced)
-# =============================================================================
-
-if (sys.nframe() == 0) {
-  
-  TARGETS <- c("ASUP", "LNAS")
-  
-  FEATURES_DEFAULT <- c(
-    "npp", "mnkc_epi", "zeu", "mnkc_mumeso", "zooc", "mnkc_hmlmeso",
-    "sst", "sst_std", "sst_fdist", "chl_fdist", "chl",
-    "ekman_anom_lag7", "ekman_anom", "ekman_anom_lag3", "ekman_7d",
-    "n_upwell_events_14d", "n_upwell_events_3d", "n_upwell_events_7d",
-    "tp", "ekman_pumping", "ekman_anom_lag14", "tisr", "slhf", "ssrd",
-    "adt", "sla", "adt_std", "sla_std", "gke", "mld", "fsle_max",
-    "ac_normdist", "c_normdist", "moon_phase", "bathy", "bathy_std",
-    "o2_0", "o2_100", "o2_500"
-  )
-  
-  data_path <- "C:/Users/h2ugo/Documents/COSTA/longline/data/processed"
-  
-  for (TARGET in TARGETS) {
-
-    out_path <- sprintf("C:/Users/h2ugo/Documents/COSTA/longline/data_analysis/GAM/output/%s", TARGET)
-
-    df <- read.csv(file.path(data_path, "LL_extracted.csv"))
-    
-    # FOR BINOMIAL: presence/absence
-    df[[TARGET]] <- ifelse(df[[TARGET]] > 1, 1, df[[TARGET]])
-
-    # Mirror the pipeline preprocessing (see project memory / run_pipeline_spatialCV).
-    df <- df[df$embarcacao != "Arquipelago" & df$Year >= 2015, ]
-    df <- df[is.finite(df$nhooks) & df$nhooks > 0, ]     # offset needs positive effort
-    names(df)[names(df) == "x_centroid"] <- "lon"
-    names(df)[names(df) == "y_centroid"] <- "lat"
-    df$month <- df$Month
-    df$year  <- factor(df$Year)
-
-    dir.create(out_path, showWarnings = FALSE, recursive = TRUE)
-    sink(file.path(out_path, "covariate_selection_log.txt"), split = TRUE)
-    tryCatch({   # finally: never leave the console sinked if the run errors
-
-      res <- select_gam_covariates(
-        data       = df,
-        response   = TARGET,
-        candidates = FEATURES_DEFAULT,
-        structural = c("s(year, bs='re')", "te(lon, lat)"),
-        offset     = "nhooks",          # model catch per effort (log-hooks offset)
-      #  knots      = list(month = c(0.5, 12.5)),
-        cv_k       = 5,
-        cv_scheme  = "stratified",      # rare-event target (~4% prevalence): stratify folds
-                                        #   on the 0/1 label instead of SPCV so no fold lacks
-                                        #   positives. Drop this arg to use the SPCV default.
-        outdir     = out_path
-      )
-
-      # Persist for later inspection: readRDS(...) then summary()/gam.check()/plot().
-      saveRDS(res$model, file.path(out_path, "gam_model.rds"))  # the mgcv gam object
-      saveRDS(res,       file.path(out_path, "selection_result.rds"))  # + kept set, decision table, path
-
-    }, finally = sink())
-  }
 }

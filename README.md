@@ -10,12 +10,19 @@ Given a response and a pool of candidate covariates, `select_gam_covariates()`:
 
 Every threshold is a logged, overridable argument; nothing is hardcoded to a particular dataset. Structural (spatial/temporal) terms are forced in and not screened — covariates must earn their place over and above them.
 
-## Usage
-
-This repo is meant to be cloned once and sourced by path from consuming projects. Sourcing loads only the functions (the example run at the bottom of the script executes only under `Rscript`, not when sourced):
+## Installation
 
 ```r
-source("C:/Users/h2ugo/Documents/h2gam/covariate_selection.R")
+# install.packages("remotes")
+remotes::install_github("h2ugoparra/h2gam")
+```
+
+Pin a release for reproducibility, e.g. `remotes::install_github("h2ugoparra/h2gam@v0.1.0")`.
+
+## Usage
+
+```r
+library(h2gam)
 
 res <- select_gam_covariates(
   data       = df,
@@ -30,12 +37,12 @@ res <- select_gam_covariates(
 saveRDS(res$model, "output/my_target/gam_model.rds")
 ```
 
-Each project keeps its own short driver script (data loading, preprocessing, target list); the selection logic lives here.
+Each project keeps its own short driver script (data loading, preprocessing, target list); the selection logic lives here. See `?select_gam_covariates` for the full argument reference and a runnable synthetic example, or `inst/examples/synthetic_demo.R` for a self-contained end-to-end demo.
 
 ## Dependencies
 
-Required: `mgcv`, `cluster`.
-Optional (feature-gated): `DHARMa` (residual diagnostics), `sf` (spatial CV blocking).
+Required: `mgcv` (attached with the package).
+Optional (feature-gated via `Suggests`): `DHARMa` (residual diagnostics in family suggestion), `sf` (the `euclidean` spatial-CV metric, which reprojects lon/lat to metres). The default `haversine` metric needs neither.
 
 ## Outputs
 
