@@ -645,8 +645,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   mgcv place knots automatically; entries for absent variables are ignored.
 #' @param offset Name of an effort column; adds `offset(log(<offset>))` to
 #'   every fit (including family suggestion, so AIC stays comparable).
-#' @param outdir Directory for the decision-table CSV and diagnostic PNGs
-#'   (created if absent).
+#' @param outdir Directory for the decision-table CSV, diagnostic PNGs, and the
+#'   run log (created if absent).
+#' @param logfile Filename (within `outdir`) for a run log that captures all
+#'   the console output; `NULL` disables it. Only written when `verbose = TRUE`
+#'   (there is nothing to capture otherwise). The sink is unwound on exit, so an
+#'   error mid-run still restores the console.
 #' @param seed Random seed for fold construction.
 #' @param verbose Print progress, the family table, the selection path, and
 #'   the final model summary.
@@ -655,10 +659,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   covariate names), `family` (chosen family label), `decision` (per-candidate
 #'   decision table, also written to `covariate_decision_table.csv`), `path`
 #'   (forward-selection steps), `formula` (final formula as a string),
-#'   `dev_expl` (deviance explained), and `folds` (integer fold vector).
+#'   `dev_expl` (deviance explained), `folds` (integer fold vector), and
+#'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
-#'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`.
+#'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`,
+#'   and (unless disabled) the run log named by `logfile`.
 #'
 #' @examples
 #' \donttest{
@@ -697,12 +703,23 @@ select_gam_covariates <- function(
     knots          = NULL,
     offset         = NULL,
     outdir         = ".",
+    logfile        = "covariate_selection_log.txt",
     seed           = 1,
     verbose        = TRUE) {
 
   stopifnot(response %in% names(data))
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+  # Optional run log: tee all console output to outdir/logfile. All progress
+  # output is verbose-gated, so there is nothing to capture unless verbose.
+  # on.exit guarantees the sink is popped even if the run errors, so a failure
+  # never leaves the console redirected; split = TRUE keeps the console echo.
+  do_log <- !is.null(logfile) && isTRUE(verbose)
+  if (do_log) {
+    sink(file.path(outdir, logfile), split = TRUE)
+    on.exit(sink(), add = TRUE)
+  }
 
   # -- family --------------------------------------------------------------
   if (identical(family, "auto")) {
@@ -837,5 +854,6 @@ select_gam_covariates <- function(
 
   invisible(list(model = model, kept = kept, family = fs$chosen,
                  decision = decision, path = fw$path, formula = final_formula,
-                 dev_expl = dev_expl, folds = folds))
+                 dev_expl = dev_expl, folds = folds,
+                 logfile = if (do_log) file.path(outdir, logfile) else NULL))
 }
