@@ -4,7 +4,7 @@ Automated GAM covariate validation & selection for [mgcv](https://cran.r-project
 
 Given a response and a pool of candidate covariates, `select_gam_covariates()`:
 
-1. **Profiles the response** and auto-suggests a family (count / proportion / positive / gaussian branches), ranked by AIC + residual diagnostics.
+1. **Profiles the response** and auto-suggests a family (count / proportion / positive / gaussian branches), ranked by AIC. Dispersion and a DHARMa residual-uniformity p-value are reported alongside for you to inspect, but do not affect the choice — and since both are measured on the structural-only model, a low `resid_ks_p` reflects not-yet-modelled covariates and structure as much as the family. Re-check it on the final fit before acting on it.
 2. **Forward-selects** a decorrelated, prediction-relevant covariate subset, scored by random/spatial-block CV skill, with a concurvity gate and a BIC tie-break / 1-SE stopping rule. Fold construction is set by `cv_scheme`: `"spatial"` (block CV, the default) or `"stratified"` — random k-fold stratified on the response, for binomial / low-prevalence targets where spatial blocks would leave folds with too few positives.
 3. Runs a **bidirectional backward re-check**, a final `select=TRUE` shrinkage fit, and adequacy diagnostics.
 
@@ -42,7 +42,7 @@ Each project keeps its own short driver script (data loading, preprocessing, tar
 ## Dependencies
 
 Required: `mgcv` (attached with the package).
-Optional (feature-gated via `Suggests`): `DHARMa` (residual diagnostics in family suggestion), `sf` (the `euclidean` spatial-CV metric, which reprojects lon/lat to metres). The default `haversine` metric needs neither.
+Optional (feature-gated via `Suggests`): `DHARMa` (residual diagnostics in family suggestion), `sf` (only when reprojecting lon/lat for the `euclidean` spatial-CV metric, i.e. when you pass `cv_crs`). The default `haversine` metric, and `euclidean` on already-projected coordinates, need neither.
 
 ## Outputs
 

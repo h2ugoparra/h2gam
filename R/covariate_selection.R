@@ -5,7 +5,8 @@
 #
 # Given a response and a pool of candidate covariates it:
 #   1. profiles the response and auto-suggests a family (count / proportion /
-#      positive / gaussian branches), auto-ranked by AIC + residual diagnostics;
+#      positive / gaussian branches), ranked by AIC alone; dispersion and
+#      residual uniformity are reported for inspection, not scored;
 #   2. forward-selects a DECORRELATED, prediction-relevant covariate subset,
 #      scored by spatial-block CV skill, with a concurvity gate and a BIC
 #      tie-break / 1-SE stopping rule;
@@ -58,7 +59,7 @@ family_candidates <- function(p) {
     # i.e. the probability of >=1 catch under a Poisson encounter rate ~ hooks
     # (the presence analogue of the log-link count model). probit is included as
     # a cheap symmetric alternative. AIC is comparable across links here (same
-    # response and likelihood); the existing AIC + DHARMa ranking picks among them.
+    # response and likelihood), and AIC alone is what picks among them.
     add("binomial_logit",   function() binomial(link = "logit"))
     add("binomial_cloglog", function() binomial(link = "cloglog"))
     add("binomial_probit",  function() binomial(link = "probit"))
@@ -119,8 +120,10 @@ dharma_ks <- function(m) {
 }
 
 # Fit each candidate family on the structural-only model, rank by AIC (ok
-# families first), and flag dispersion / residual uniformity. Returns the
-# chosen family generator plus a diagnostic table.
+# families first), and flag dispersion / residual uniformity. `ok` means the fit
+# converged without error -- it is not a diagnostic pass, and the dispersion /
+# resid_ks_p columns do not enter the ranking. Returns the chosen family
+# generator plus a diagnostic table.
 suggest_family <- function(data, response, structural, knots, offset = NULL) {
   p     <- profile_response(data[[response]])
   cands <- family_candidates(p)
@@ -229,13 +232,24 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #' @param response Name of the response column (block-mean view for stage 2).
 #' @param candidates Character vector of covariate names (numeric ones feed the
 #'   stage-2 covariate view; others are ignored).
-#' @param coords Length-2 character vector naming the longitude and latitude
-#'   columns (in that order). Default `c("lon", "lat")`.
+#' @param coords Length-2 character vector naming the two coordinate columns
+#'   (x/longitude then y/latitude). Default `c("lon", "lat")`. For
+#'   `metric = "haversine"` these must be lon/lat degrees; for
+#'   `metric = "euclidean"` with `crs = NULL` they are taken as already-planar
+#'   coordinates.
 #' @param k Number of folds.
-#' @param metric `"haversine"` (coordinates in lon/lat degrees) or
-#'   `"euclidean"` (coordinates reprojected to metres via the sf package).
-#' @param threshold AHC cut height: degrees for haversine, metres for
-#'   euclidean. `NULL` (default) uses the 10th percentile of pairwise distances.
+#' @param metric `"haversine"` (great-circle distance on lon/lat degrees; no
+#'   projection, valid anywhere on the globe) or `"euclidean"` (planar
+#'   distance; see `crs`). Euclidean uses the C-optimised [stats::dist()] and
+#'   scales better to large n than the haversine matrix.
+#' @param threshold AHC cut height: degrees for haversine, projected units
+#'   (e.g. metres) for euclidean. `NULL` (default) uses the 10th percentile of
+#'   pairwise distances.
+#' @param crs Only used when `metric = "euclidean"`. `NULL` (default) treats
+#'   the `coords` columns as already projected. Otherwise an sf/PROJ CRS (a
+#'   proj string or EPSG code) used to reproject lon/lat to a planar system
+#'   before computing distances (needs the sf package). No projection is
+#'   assumed by default, so this function makes no study-area assumption.
 #' @param linkage AHC linkage method; `"ward"` is downgraded to `"average"`
 #'   for haversine, where it is invalid.
 #' @param pca_var Fraction of variance retained when the stage-2 covariate
@@ -250,23 +264,31 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #' @export
 make_spatial_folds <- function(data, response, candidates, coords = c("lon", "lat"),
                                k = 10, metric = "haversine", threshold = NULL,
-                               linkage = "average", pca_var = 0.95, seed = 42,
-                               verbose = TRUE) {
-  lon <- data[[coords[1]]]; lat <- data[[coords[2]]]
+                               crs = NULL, linkage = "average", pca_var = 0.95,
+                               seed = 42, verbose = TRUE) {
+  c1 <- data[[coords[1]]]; c2 <- data[[coords[2]]]           # coord 1 (x/lon), coord 2 (y/lat)
 
   # -- Stage 1: AHC -> spatially coherent blocks --------------------------
   if (metric == "haversine") {
-    dmat <- .haversine_dist(lat, lon); d <- stats::as.dist(dmat)
+    dmat <- .haversine_dist(c2, c1); d <- stats::as.dist(dmat)  # (lat, lon) degrees
     link <- if (linkage == "ward") "average" else linkage    # ward invalid for haversine
     thr  <- if (is.null(threshold)) stats::quantile(d, 0.10) else threshold * pi / 180
-    loc  <- cbind(lat, lon)                                  # stage-2 location view (degrees)
+    loc  <- cbind(c2, c1)                                    # stage-2 location view (degrees)
   } else {
-    if (!requireNamespace("sf", quietly = TRUE))
-      stop("metric='euclidean' needs the sf package to reproject lon/lat.")
-    # reproject lon/lat -> Lambert Conformal Conic (metres) so euclidean distance is valid
-    lcc <- "+proj=lcc +lat_1=25 +lat_2=45 +lat_0=35 +lon_0=-25 +datum=WGS84 +units=m +no_defs"
-    loc  <- sf::sf_project(from = "+proj=longlat +datum=WGS84", to = lcc, pts = cbind(lon, lat))
-    d    <- stats::dist(loc, method = "euclidean")           # stage-2 location view (metres)
+    # euclidean distance on PLANAR coordinates. This function assumes no
+    # particular study area: with crs = NULL the given coords are taken as
+    # already projected (project upstream, in whatever CRS fits your region);
+    # pass a crs (an sf/PROJ string or EPSG code) to reproject lon/lat -> that
+    # CRS here. Euclidean distance on raw lon/lat degrees is only valid near
+    # the equator, so no default projection is baked in.
+    if (is.null(crs)) {
+      loc <- cbind(c1, c2)                                   # already planar (metres/units)
+    } else {
+      if (!requireNamespace("sf", quietly = TRUE))
+        stop("make_spatial_folds(crs=...) needs the sf package to reproject lon/lat.")
+      loc <- sf::sf_project(from = "+proj=longlat +datum=WGS84", to = crs, pts = cbind(c1, c2))
+    }
+    d    <- stats::dist(loc, method = "euclidean")           # stage-2 location view (planar)
     link <- linkage
     thr  <- if (is.null(threshold)) stats::quantile(d, 0.10) else threshold
   }
@@ -561,7 +583,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'
 #' Given a response and a pool of candidate covariates, this:
 #' 1. profiles the response and auto-suggests a family (count / proportion /
-#'    positive / gaussian branches), ranked by AIC + residual diagnostics;
+#'    positive / gaussian branches), ranked by AIC alone;
 #' 2. forward-selects a decorrelated, prediction-relevant covariate subset,
 #'    scored by cross-validated held-out deviance (spatial-block or
 #'    response-stratified folds), with a concurvity gate and a BIC tie-break /
@@ -588,8 +610,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`.
 #' @param coords Length-2 character vector naming the longitude and latitude
 #'   columns, used for spatial folds and complete-case filtering.
-#' @param family `"auto"` (default) profiles the response and ranks candidate
-#'   families by AIC + residual diagnostics on the structural-only model.
+#' @param family `"auto"` (default) profiles the response and takes the
+#'   lowest-AIC candidate that fits on the structural-only model. The reported
+#'   `dispersion` and `resid_ks_p` columns are diagnostics to inspect, not
+#'   inputs to the choice. Both are measured before covariate selection, so a
+#'   low `resid_ks_p` reflects not-yet-modelled covariates and structure as much
+#'   as the family -- re-check it on the final fit before acting on it.
 #'   Alternatively a family object or zero-argument family generator to skip
 #'   the suggestion step.
 #' @param concurvity_max Reject a candidate whose worst pairwise concurvity
@@ -606,8 +632,15 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   on the response; see [make_stratified_folds()]). Use `"stratified"` for
 #'   low-prevalence (e.g. binomial presence/absence) targets where spatial
 #'   blocks would leave folds with too few positives.
-#' @param cv_metric SPCV distance: `"haversine"` (lon/lat degrees) or
-#'   `"euclidean"` (reprojected metres; needs the sf package).
+#' @param cv_metric SPCV distance: `"haversine"` (the default; great-circle on
+#'   lon/lat degrees, correct anywhere with no projection) or `"euclidean"`
+#'   (planar; faster on large n, but see `cv_crs`).
+#' @param cv_crs Only used when `cv_metric = "euclidean"`. `NULL` (default)
+#'   would compute euclidean distance on raw lon/lat degrees, which is only
+#'   valid near the equator -- so for euclidean pass an sf/PROJ CRS (proj
+#'   string or EPSG code) suited to your study area to reproject first (needs
+#'   the sf package). No study-area projection is assumed; `"haversine"` avoids
+#'   the question entirely.
 #' @param cv_threshold SPCV AHC block threshold (`NULL` = 10th percentile of
 #'   pairwise distances).
 #' @param cv_linkage SPCV AHC linkage (`"ward"` downgraded to `"average"` for
@@ -619,8 +652,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   mgcv place knots automatically; entries for absent variables are ignored.
 #' @param offset Name of an effort column; adds `offset(log(<offset>))` to
 #'   every fit (including family suggestion, so AIC stays comparable).
-#' @param outdir Directory for the decision-table CSV and diagnostic PNGs
-#'   (created if absent).
+#' @param outdir Directory for the decision-table CSV, diagnostic PNGs, and the
+#'   run log (created if absent).
+#' @param logfile Filename (within `outdir`) for a run log that captures all
+#'   the console output; `NULL` disables it. Only written when `verbose = TRUE`
+#'   (there is nothing to capture otherwise). The sink is unwound on exit, so an
+#'   error mid-run still restores the console.
 #' @param seed Random seed for fold construction.
 #' @param verbose Print progress, the family table, the selection path, and
 #'   the final model summary.
@@ -629,10 +666,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   covariate names), `family` (chosen family label), `decision` (per-candidate
 #'   decision table, also written to `covariate_decision_table.csv`), `path`
 #'   (forward-selection steps), `formula` (final formula as a string),
-#'   `dev_expl` (deviance explained), and `folds` (integer fold vector).
+#'   `dev_expl` (deviance explained), `folds` (integer fold vector), and
+#'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
-#'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`.
+#'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`,
+#'   and (unless disabled) the run log named by `logfile`.
 #'
 #' @examples
 #' \donttest{
@@ -664,18 +703,30 @@ select_gam_covariates <- function(
     na_max         = 0.30,
     cv_k           = 5,
     cv_scheme      = "spatial",
-    cv_metric      = "euclidean",
+    cv_metric      = "haversine",
+    cv_crs         = NULL,
     cv_threshold   = NULL,
     cv_linkage     = "ward",
     knots          = NULL,
     offset         = NULL,
     outdir         = ".",
+    logfile        = "covariate_selection_log.txt",
     seed           = 1,
     verbose        = TRUE) {
 
   stopifnot(response %in% names(data))
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+  # Optional run log: tee all console output to outdir/logfile. All progress
+  # output is verbose-gated, so there is nothing to capture unless verbose.
+  # on.exit guarantees the sink is popped even if the run errors, so a failure
+  # never leaves the console redirected; split = TRUE keeps the console echo.
+  do_log <- !is.null(logfile) && isTRUE(verbose)
+  if (do_log) {
+    sink(file.path(outdir, logfile), split = TRUE)
+    on.exit(sink(), add = TRUE)
+  }
 
   # -- family --------------------------------------------------------------
   if (identical(family, "auto")) {
@@ -713,7 +764,7 @@ select_gam_covariates <- function(
     make_stratified_folds(data, response, k = cv_k, seed = seed, verbose = verbose)
   } else {
     make_spatial_folds(data, response, scr$keep, coords = coords, k = cv_k,
-                       metric = cv_metric, threshold = cv_threshold,
+                       metric = cv_metric, threshold = cv_threshold, crs = cv_crs,
                        linkage = cv_linkage, seed = seed, verbose = verbose)
   }
 
@@ -810,5 +861,6 @@ select_gam_covariates <- function(
 
   invisible(list(model = model, kept = kept, family = fs$chosen,
                  decision = decision, path = fw$path, formula = final_formula,
-                 dev_expl = dev_expl, folds = folds))
+                 dev_expl = dev_expl, folds = folds,
+                 logfile = if (do_log) file.path(outdir, logfile) else NULL))
 }

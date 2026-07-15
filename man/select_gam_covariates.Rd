@@ -16,12 +16,14 @@ select_gam_covariates(
   na_max = 0.3,
   cv_k = 5,
   cv_scheme = "spatial",
-  cv_metric = "euclidean",
+  cv_metric = "haversine",
+  cv_crs = NULL,
   cv_threshold = NULL,
   cv_linkage = "ward",
   knots = NULL,
   offset = NULL,
   outdir = ".",
+  logfile = "covariate_selection_log.txt",
   seed = 1,
   verbose = TRUE
 )
@@ -41,8 +43,12 @@ and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}.}
 \item{coords}{Length-2 character vector naming the longitude and latitude
 columns, used for spatial folds and complete-case filtering.}
 
-\item{family}{\code{"auto"} (default) profiles the response and ranks candidate
-families by AIC + residual diagnostics on the structural-only model.
+\item{family}{\code{"auto"} (default) profiles the response and takes the
+lowest-AIC candidate that fits on the structural-only model. The reported
+\code{dispersion} and \code{resid_ks_p} columns are diagnostics to inspect, not
+inputs to the choice. Both are measured before covariate selection, so a
+low \code{resid_ks_p} reflects not-yet-modelled covariates and structure as much
+as the family -- re-check it on the final fit before acting on it.
 Alternatively a family object or zero-argument family generator to skip
 the suggestion step.}
 
@@ -65,8 +71,16 @@ on the response; see \code{\link[=make_stratified_folds]{make_stratified_folds()
 low-prevalence (e.g. binomial presence/absence) targets where spatial
 blocks would leave folds with too few positives.}
 
-\item{cv_metric}{SPCV distance: \code{"haversine"} (lon/lat degrees) or
-\code{"euclidean"} (reprojected metres; needs the sf package).}
+\item{cv_metric}{SPCV distance: \code{"haversine"} (the default; great-circle on
+lon/lat degrees, correct anywhere with no projection) or \code{"euclidean"}
+(planar; faster on large n, but see \code{cv_crs}).}
+
+\item{cv_crs}{Only used when \code{cv_metric = "euclidean"}. \code{NULL} (default)
+would compute euclidean distance on raw lon/lat degrees, which is only
+valid near the equator -- so for euclidean pass an sf/PROJ CRS (proj
+string or EPSG code) suited to your study area to reproject first (needs
+the sf package). No study-area projection is assumed; \code{"haversine"} avoids
+the question entirely.}
 
 \item{cv_threshold}{SPCV AHC block threshold (\code{NULL} = 10th percentile of
 pairwise distances).}
@@ -83,8 +97,13 @@ mgcv place knots automatically; entries for absent variables are ignored.}
 \item{offset}{Name of an effort column; adds \verb{offset(log(<offset>))} to
 every fit (including family suggestion, so AIC stays comparable).}
 
-\item{outdir}{Directory for the decision-table CSV and diagnostic PNGs
-(created if absent).}
+\item{outdir}{Directory for the decision-table CSV, diagnostic PNGs, and the
+run log (created if absent).}
+
+\item{logfile}{Filename (within \code{outdir}) for a run log that captures all
+the console output; \code{NULL} disables it. Only written when \code{verbose = TRUE}
+(there is nothing to capture otherwise). The sink is unwound on exit, so an
+error mid-run still restores the console.}
 
 \item{seed}{Random seed for fold construction.}
 
@@ -96,16 +115,18 @@ the final model summary.}
 covariate names), \code{family} (chosen family label), \code{decision} (per-candidate
 decision table, also written to \code{covariate_decision_table.csv}), \code{path}
 (forward-selection steps), \code{formula} (final formula as a string),
-\code{dev_expl} (deviance explained), and \code{folds} (integer fold vector).
+\code{dev_expl} (deviance explained), \code{folds} (integer fold vector), and
+\code{logfile} (path to the run log, or \code{NULL} if none was written).
 
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
-\code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png}.
+\code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png},
+and (unless disabled) the run log named by \code{logfile}.
 }
 \description{
 Given a response and a pool of candidate covariates, this:
 \enumerate{
 \item profiles the response and auto-suggests a family (count / proportion /
-positive / gaussian branches), ranked by AIC + residual diagnostics;
+positive / gaussian branches), ranked by AIC alone;
 \item forward-selects a decorrelated, prediction-relevant covariate subset,
 scored by cross-validated held-out deviance (spatial-block or
 response-stratified folds), with a concurvity gate and a BIC tie-break /

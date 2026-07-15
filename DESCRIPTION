@@ -5,7 +5,7 @@ Authors@R:
     person("Hugo", "Parra", email = "h2ugo.parra@pm.me", role = c("aut", "cre"))
 Description: Given a response and a pool of candidate covariates, profiles the
     response and auto-suggests an 'mgcv' family (count / proportion / positive /
-    gaussian branches, ranked by AIC and residual diagnostics), forward-selects
+    gaussian branches, ranked by AIC), forward-selects
     a decorrelated, prediction-relevant covariate subset scored by spatial-block
     or response-stratified cross-validation with a concurvity gate and a
     BIC tie-break / one-standard-error stopping rule, then runs a bidirectional
