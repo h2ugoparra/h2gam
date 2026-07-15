@@ -1,6 +1,6 @@
 Package: h2gam
 Title: Automated GAM Covariate Validation and Selection for 'mgcv'
-Version: 0.1.0
+Version: 0.2.0
 Authors@R:
     person("Hugo", "Parra", email = "h2ugo.parra@pm.me", role = c("aut", "cre"))
 Description: Given a response and a pool of candidate covariates, profiles the
