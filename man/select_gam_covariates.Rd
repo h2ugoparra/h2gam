@@ -43,8 +43,12 @@ and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}.}
 \item{coords}{Length-2 character vector naming the longitude and latitude
 columns, used for spatial folds and complete-case filtering.}
 
-\item{family}{\code{"auto"} (default) profiles the response and ranks candidate
-families by AIC + residual diagnostics on the structural-only model.
+\item{family}{\code{"auto"} (default) profiles the response and takes the
+lowest-AIC candidate that fits on the structural-only model. The reported
+\code{dispersion} and \code{resid_ks_p} columns are diagnostics to inspect, not
+inputs to the choice. Both are measured before covariate selection, so a
+low \code{resid_ks_p} reflects not-yet-modelled covariates and structure as much
+as the family -- re-check it on the final fit before acting on it.
 Alternatively a family object or zero-argument family generator to skip
 the suggestion step.}
 
@@ -122,7 +126,7 @@ and (unless disabled) the run log named by \code{logfile}.
 Given a response and a pool of candidate covariates, this:
 \enumerate{
 \item profiles the response and auto-suggests a family (count / proportion /
-positive / gaussian branches), ranked by AIC + residual diagnostics;
+positive / gaussian branches), ranked by AIC alone;
 \item forward-selects a decorrelated, prediction-relevant covariate subset,
 scored by cross-validated held-out deviance (spatial-block or
 response-stratified folds), with a concurvity gate and a BIC tie-break /
