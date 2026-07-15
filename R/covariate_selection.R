@@ -5,7 +5,8 @@
 #
 # Given a response and a pool of candidate covariates it:
 #   1. profiles the response and auto-suggests a family (count / proportion /
-#      positive / gaussian branches), auto-ranked by AIC + residual diagnostics;
+#      positive / gaussian branches), ranked by AIC alone; dispersion and
+#      residual uniformity are reported for inspection, not scored;
 #   2. forward-selects a DECORRELATED, prediction-relevant covariate subset,
 #      scored by spatial-block CV skill, with a concurvity gate and a BIC
 #      tie-break / 1-SE stopping rule;
@@ -58,7 +59,7 @@ family_candidates <- function(p) {
     # i.e. the probability of >=1 catch under a Poisson encounter rate ~ hooks
     # (the presence analogue of the log-link count model). probit is included as
     # a cheap symmetric alternative. AIC is comparable across links here (same
-    # response and likelihood); the existing AIC + DHARMa ranking picks among them.
+    # response and likelihood), and AIC alone is what picks among them.
     add("binomial_logit",   function() binomial(link = "logit"))
     add("binomial_cloglog", function() binomial(link = "cloglog"))
     add("binomial_probit",  function() binomial(link = "probit"))
@@ -119,8 +120,10 @@ dharma_ks <- function(m) {
 }
 
 # Fit each candidate family on the structural-only model, rank by AIC (ok
-# families first), and flag dispersion / residual uniformity. Returns the
-# chosen family generator plus a diagnostic table.
+# families first), and flag dispersion / residual uniformity. `ok` means the fit
+# converged without error -- it is not a diagnostic pass, and the dispersion /
+# resid_ks_p columns do not enter the ranking. Returns the chosen family
+# generator plus a diagnostic table.
 suggest_family <- function(data, response, structural, knots, offset = NULL) {
   p     <- profile_response(data[[response]])
   cands <- family_candidates(p)
@@ -580,7 +583,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'
 #' Given a response and a pool of candidate covariates, this:
 #' 1. profiles the response and auto-suggests a family (count / proportion /
-#'    positive / gaussian branches), ranked by AIC + residual diagnostics;
+#'    positive / gaussian branches), ranked by AIC alone;
 #' 2. forward-selects a decorrelated, prediction-relevant covariate subset,
 #'    scored by cross-validated held-out deviance (spatial-block or
 #'    response-stratified folds), with a concurvity gate and a BIC tie-break /
@@ -607,8 +610,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`.
 #' @param coords Length-2 character vector naming the longitude and latitude
 #'   columns, used for spatial folds and complete-case filtering.
-#' @param family `"auto"` (default) profiles the response and ranks candidate
-#'   families by AIC + residual diagnostics on the structural-only model.
+#' @param family `"auto"` (default) profiles the response and takes the
+#'   lowest-AIC candidate that fits on the structural-only model. The reported
+#'   `dispersion` and `resid_ks_p` columns are diagnostics to inspect, not
+#'   inputs to the choice. Both are measured before covariate selection, so a
+#'   low `resid_ks_p` reflects not-yet-modelled covariates and structure as much
+#'   as the family -- re-check it on the final fit before acting on it.
 #'   Alternatively a family object or zero-argument family generator to skip
 #'   the suggestion step.
 #' @param concurvity_max Reject a candidate whose worst pairwise concurvity
