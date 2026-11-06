@@ -491,13 +491,23 @@ forward_select <- function(data, response, candidates, structural, family_gen,
   accepted  <- character()
   remaining <- candidates
   cur_dev   <- fold_dev(accepted)          # structural-only baseline
+  # A fold is skipped (NA) when its fit, prediction, or deviance fails. Without
+  # a scorable baseline every candidate would just look like "no CV improvement",
+  # so fail loudly instead.
+  if (sum(is.finite(cur_dev)) < 2)
+    stop(sprintf(paste0("forward selection: the structural-only model could be scored on ",
+                        "only %d of %d CV folds (fit/prediction failed or non-finite ",
+                        "deviance); check for NA/invalid values in the model variables."),
+                 sum(is.finite(cur_dev)), length(cur_dev)))
   path      <- list()
   step      <- 0
+  low_folds <- character()                 # candidates scored on < half the folds
 
   repeat {
     step <- step + 1
     scored <- lapply(remaining, function(v) {
       cd   <- fold_dev(c(accepted, v))
+      if (sum(is.finite(cd)) < length(cd) / 2) low_folds <<- union(low_folds, v)
       diff <- cur_dev - cd                 # paired per-fold improvement
       list(v = v, cd = cd,
            mean = mean(diff, na.rm = TRUE),
@@ -531,6 +541,10 @@ forward_select <- function(data, response, candidates, structural, family_gen,
     cur_dev   <- picked$cd
     if (length(remaining) == 0) break
   }
+
+  if (length(low_folds))
+    warning(sprintf("forward selection: %s could be scored on fewer than half the CV folds (fit/prediction failures); their CV gain is unreliable.",
+                    paste(low_folds, collapse = ", ")), call. = FALSE)
 
   list(accepted = accepted,
        path = if (length(path)) do.call(rbind, path) else NULL)
@@ -716,6 +730,23 @@ select_gam_covariates <- function(
 
   stopifnot(response %in% names(data))
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
+  if (!is.null(offset)) {
+    if (!offset %in% names(data)) stop(sprintf("offset column '%s' not found in data.", offset))
+    if (any(data[[offset]] <= 0, na.rm = TRUE))
+      stop(sprintf("offset column '%s' must be > 0 (it enters as log(%s)).", offset, offset))
+  }
+
+  # random-effect structural terms -> excluded from held-out CV prediction
+  re_terms  <- structural[grepl("bs\\s*=\\s*['\"]re['\"]", structural)]
+  re_vars   <- sub("^\\s*s\\(\\s*([A-Za-z0-9_.]+).*", "\\1", re_terms)
+  re_labels <- if (length(re_vars)) paste0("s(", re_vars, ")") else character()
+  # The held-out level remap in forward_select() needs a factor; on a numeric
+  # variable s(x, bs='re') is a penalised slope, not random intercepts, and the
+  # remap would turn every held-out prediction into NA.
+  for (v in re_vars) if (!is.factor(data[[v]]))
+    stop(sprintf(paste0("random-effect term s(%s, bs='re') needs '%s' to be a factor ",
+                        "(numeric gives a penalised slope, not random intercepts); ",
+                        "convert it first, e.g. data$%s <- factor(data$%s)."), v, v, v, v))
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
   # Optional run log: tee all console output to outdir/logfile. All progress
@@ -747,8 +778,15 @@ select_gam_covariates <- function(
   if (verbose) cat(sprintf("\n== Univariate screen ==\n  kept %d, dropped %d\n",
                            length(scr$keep), length(scr$dropped)))
 
-  # complete-case on the comparison columns so every CV model sees the same rows
-  need <- c(response, coords, scr$keep,
+  # NA fraction on the data as supplied (before the complete-case filter below,
+  # which would otherwise make it 0 for every screened-in candidate)
+  na_frac <- vapply(candidates, function(v)
+    if (v %in% names(data)) mean(is.na(data[[v]])) else NA_real_, numeric(1))
+
+  # complete-case on the comparison columns so every CV model sees the same rows.
+  # The offset is included: an NA offset gives NA held-out predictions, which
+  # would silently void every CV fold.
+  need <- c(response, coords, scr$keep, offset,
             all.vars(stats::as.formula(paste("~", paste(structural, collapse = "+")))))
   data <- data[stats::complete.cases(data[, intersect(need, names(data))]), ]
 
@@ -767,11 +805,6 @@ select_gam_covariates <- function(
                        metric = cv_metric, threshold = cv_threshold, crs = cv_crs,
                        linkage = cv_linkage, seed = seed, verbose = verbose)
   }
-
-  # random-effect structural terms -> excluded from held-out CV prediction
-  re_terms  <- structural[grepl("bs\\s*=\\s*['\"]re['\"]", structural)]
-  re_vars   <- sub("^\\s*s\\(\\s*([A-Za-z0-9_.]+).*", "\\1", re_terms)
-  re_labels <- if (length(re_vars)) paste0("s(", re_vars, ")") else character()
 
   # -- forward selection ---------------------------------------------------
   if (verbose) cat("\n== Forward selection (CV-scored, concurvity-gated) ==\n")
@@ -796,8 +829,7 @@ select_gam_covariates <- function(
   }
   decision <- data.frame(
     covariate       = candidates,
-    na_frac         = sapply(candidates, function(v)
-                        if (v %in% names(data)) mean(is.na(data[[v]])) else NA),
+    na_frac         = na_frac,
     spearman_cluster= clusters[candidates],
     entry_step      = NA_integer_,
     concurvity      = NA_real_,
