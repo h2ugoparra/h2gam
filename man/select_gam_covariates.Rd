@@ -132,9 +132,9 @@ Given a response and a pool of candidate covariates, this:
 positive / gaussian branches), ranked by AIC alone;
 \item forward-selects a decorrelated, prediction-relevant covariate subset,
 scored by cross-validated held-out deviance (spatial-block or
-response-stratified folds), with a concurvity gate and a BIC tie-break /
-1-SE stopping rule;
-\item runs a bidirectional backward re-check (BIC), a final \code{select = TRUE}
+response-stratified folds), with a concurvity gate and a 1-SE stopping
+rule;
+\item runs a backward elimination re-check (BIC), a final \code{select = TRUE}
 shrinkage fit, and adequacy diagnostics.
 }
 }

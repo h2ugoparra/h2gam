@@ -8,10 +8,10 @@
 #      positive / gaussian branches), ranked by AIC alone; dispersion and
 #      residual uniformity are reported for inspection, not scored;
 #   2. forward-selects a DECORRELATED, prediction-relevant covariate subset,
-#      scored by spatial-block CV skill, with a concurvity gate and a BIC
-#      tie-break / 1-SE stopping rule;
-#   3. runs a bidirectional backward re-check, a final select=TRUE shrinkage
-#      fit, and adequacy diagnostics.
+#      scored by spatial-block CV skill, with a concurvity gate and a 1-SE
+#      stopping rule;
+#   3. runs a backward elimination re-check (BIC), a final select=TRUE
+#      shrinkage fit, and adequacy diagnostics.
 #
 # Every threshold is a logged, overridable argument; nothing is hardcoded to a
 # particular dataset. Structural (spatial/temporal) terms are forced in and not
@@ -633,9 +633,9 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'    positive / gaussian branches), ranked by AIC alone;
 #' 2. forward-selects a decorrelated, prediction-relevant covariate subset,
 #'    scored by cross-validated held-out deviance (spatial-block or
-#'    response-stratified folds), with a concurvity gate and a BIC tie-break /
-#'    1-SE stopping rule;
-#' 3. runs a bidirectional backward re-check (BIC), a final `select = TRUE`
+#'    response-stratified folds), with a concurvity gate and a 1-SE stopping
+#'    rule;
+#' 3. runs a backward elimination re-check (BIC), a final `select = TRUE`
 #'    shrinkage fit, and adequacy diagnostics.
 #'
 #' Every threshold is a logged, overridable argument; nothing is hardcoded to
