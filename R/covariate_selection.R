@@ -171,6 +171,17 @@ suggest_family <- function(data, response, structural, knots, offset = NULL) {
        fit = fits[[chosen]])
 }
 
+# Generator for a user-supplied family OBJECT. Unlike a constructor, the object
+# is shared by every fit, and extended families (nb(), tw(), betar(), ...)
+# store their estimated theta in its environment, so each fit would start from
+# the previous fit's estimate. Reset theta to the supplied value before each use.
+family_object_gen <- function(family) {
+  if (!inherits(family, "extended.family") || !is.function(family$putTheta))
+    return(function() family)
+  th0 <- family$getTheta()
+  function() { family$putTheta(th0); family }
+}
+
 # Family generator with the shape parameter (Tweedie p / negbin theta) held
 # FIXED at its structural-only estimate. Re-estimating it on every CV fit is the
 # dominant cost of the search; fixing it gives a large speedup with negligible
@@ -616,8 +627,11 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   inputs to the choice. Both are measured before covariate selection, so a
 #'   low `resid_ks_p` reflects not-yet-modelled covariates and structure as much
 #'   as the family -- re-check it on the final fit before acting on it.
-#'   Alternatively a family object or zero-argument family generator to skip
-#'   the suggestion step.
+#'   Alternatively a family object (e.g. `nb()`) or a zero-argument family
+#'   generator (e.g. `nb`) to skip the suggestion step. For a family object
+#'   with an estimated shape parameter, theta is reset to its supplied value
+#'   before every fit, and the object is modified in place by the fits; pass
+#'   the constructor instead to leave your object untouched.
 #' @param concurvity_max Reject a candidate whose worst pairwise concurvity
 #'   against the already-accepted covariate smooths exceeds this (structural
 #'   terms excluded from the gate).
@@ -735,7 +749,7 @@ select_gam_covariates <- function(
     if (verbose) { cat("\n== Family suggestion ==\n"); print(fs$table)
       cat(sprintf("-> chosen: %s%s\n", fs$chosen, if (squeeze) " (SV squeeze)" else "")) }
   } else {
-    family_gen <- if (is.function(family)) function() family() else function() family
+    family_gen <- if (is.function(family)) function() family() else family_object_gen(family)
     squeeze <- FALSE; fs <- list(chosen = "user", table = NULL, fit = NULL,
                                  profile = profile_response(data[[response]]))
   }
