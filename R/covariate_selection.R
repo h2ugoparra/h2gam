@@ -250,8 +250,10 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #'   proj string or EPSG code) used to reproject lon/lat to a planar system
 #'   before computing distances (needs the sf package). No projection is
 #'   assumed by default, so this function makes no study-area assumption.
-#' @param linkage AHC linkage method; `"ward"` is downgraded to `"average"`
-#'   for haversine, where it is invalid.
+#' @param linkage AHC linkage method, passed to [stats::hclust()]. `"ward"`
+#'   is taken as `"ward.D2"` (the Ward criterion on unsquared distances,
+#'   matching scikit-learn). Ward variants are downgraded to `"average"` for
+#'   haversine, where they are invalid.
 #' @param pca_var Fraction of variance retained when the stage-2 covariate
 #'   view is compressed by PCA.
 #' @param seed Random seed for the k-means / spectral steps.
@@ -267,11 +269,14 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
                                crs = NULL, linkage = "average", pca_var = 0.95,
                                seed = 42, verbose = TRUE) {
   c1 <- data[[coords[1]]]; c2 <- data[[coords[2]]]           # coord 1 (x/lon), coord 2 (y/lat)
+  # hclust's "ward" is the legacy alias for "ward.D"; scikit-learn's Ward (which
+  # SPCV mirrors) is "ward.D2".
+  if (identical(linkage, "ward")) linkage <- "ward.D2"
 
   # -- Stage 1: AHC -> spatially coherent blocks --------------------------
   if (metric == "haversine") {
     dmat <- .haversine_dist(c2, c1); d <- stats::as.dist(dmat)  # (lat, lon) degrees
-    link <- if (linkage == "ward") "average" else linkage    # ward invalid for haversine
+    link <- if (startsWith(linkage, "ward")) "average" else linkage  # ward invalid for haversine
     thr  <- if (is.null(threshold)) stats::quantile(d, 0.10) else threshold * pi / 180
     loc  <- cbind(c2, c1)                                    # stage-2 location view (degrees)
   } else {
@@ -643,8 +648,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the question entirely.
 #' @param cv_threshold SPCV AHC block threshold (`NULL` = 10th percentile of
 #'   pairwise distances).
-#' @param cv_linkage SPCV AHC linkage (`"ward"` downgraded to `"average"` for
-#'   haversine).
+#' @param cv_linkage SPCV AHC linkage (`"ward.D2"` default; Ward variants are
+#'   downgraded to `"average"` for haversine). See [make_spatial_folds()].
 #' @param knots mgcv per-smooth knot positions, passed to every `gam()`/`bam()`
 #'   fit. Mainly the cyclic boundary for `s(month, bs='cc')`: pass
 #'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
@@ -706,7 +711,7 @@ select_gam_covariates <- function(
     cv_metric      = "haversine",
     cv_crs         = NULL,
     cv_threshold   = NULL,
-    cv_linkage     = "ward",
+    cv_linkage     = "ward.D2",
     knots          = NULL,
     offset         = NULL,
     outdir         = ".",
