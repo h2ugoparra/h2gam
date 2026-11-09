@@ -30,3 +30,15 @@ test_that("select_gam_covariates writes a run log, and logfile=NULL disables it"
   # sink stack is balanced afterwards (no dangling redirection)
   expect_identical(sink.number(), 0L)
 })
+
+test_that("verbose = FALSE prints nothing", {
+  skip_on_cran()
+  set.seed(8)
+  n  <- 200
+  df <- data.frame(lon = runif(n, -20, -5), lat = runif(n, 35, 50), sst = rnorm(n))
+  df$catch <- rnbinom(n, mu = exp(1 + 0.5 * sin(df$sst)), size = 2)
+  expect_silent(select_gam_covariates(df, "catch", candidates = "sst",
+                                      structural = "te(lon, lat)", cv_k = 3,
+                                      cv_scheme = "stratified", outdir = tempdir(),
+                                      verbose = FALSE))
+})

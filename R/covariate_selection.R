@@ -112,10 +112,12 @@ sv_squeeze <- function(y) {
 # DHARMa uniformity p-value (NA if the family can't be simulated).
 dharma_ks <- function(m) {
   if (!requireNamespace("DHARMa", quietly = TRUE)) return(NA_real_)
-  out <- tryCatch({
+  # suppressMessages: DHARMa message()s an "install mgcViz" notice on every gam
+  # simulation when mgcViz is absent, which would break verbose = FALSE.
+  out <- tryCatch(suppressMessages({
     sim <- DHARMa::simulateResiduals(m, n = 250, plot = FALSE)
     DHARMa::testUniformity(sim, plot = FALSE)$p.value
-  }, error = function(e) NA_real_)
+  }), error = function(e) NA_real_)
   out
 }
 
@@ -903,7 +905,10 @@ select_gam_covariates <- function(
 
   # -- diagnostics plots ---------------------------------------------------
   grDevices::png(file.path(outdir, "selection_diagnostics.png"), width = 1400, height = 1100, res = 130)
-  tryCatch({ par(mfrow = c(2, 2)); gam.check(model) },
+  # gam.check() also prints convergence info and the k-index table; keep that
+  # in the console/log when verbose, swallow it otherwise.
+  tryCatch({ par(mfrow = c(2, 2))
+             if (verbose) gam.check(model) else utils::capture.output(gam.check(model)) },
            finally = grDevices::dev.off())
 
   grDevices::png(file.path(outdir, "partial_effects.png"), width = 1400, height = 1100, res = 130)
