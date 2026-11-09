@@ -53,3 +53,15 @@ test_that("make_spatial_folds (euclidean, crs=NULL) uses planar coords as-is", {
   expect_length(folds, n)
   expect_setequal(unique(folds), 1:4)
 })
+
+test_that("make_spatial_folds maps legacy 'ward' to ward.D2 (sklearn Ward)", {
+  set.seed(5)
+  n  <- 150
+  df <- data.frame(x = runif(n, 0, 5e5), y = runif(n, 0, 5e5),
+                   x1 = rnorm(n), z = rnorm(n))
+  fold <- function(link) make_spatial_folds(df, "z", candidates = "x1", k = 3,
+                                            coords = c("x", "y"), metric = "euclidean",
+                                            linkage = link, verbose = FALSE)
+  expect_no_message(f_ward <- fold("ward"))   # no hclust "renamed to ward.D" message
+  expect_identical(f_ward, fold("ward.D2"))
+})
