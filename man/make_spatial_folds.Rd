@@ -75,6 +75,11 @@ clustered, the one-hot memberships are stacked into a co-occurrence
 affinity, and spectral clustering assigns folds. Folds are geographically
 separated and representative of covariate and label space.
 }
+\details{
+Stage 1 builds the full pairwise distance matrix, so memory and time grow
+with n^2 (roughly 8 * n^2 bytes for haversine: about 20 GB at n = 50,000).
+For large data, thin or aggregate the rows before building folds.
+}
 \seealso{
 \code{\link[=make_stratified_folds]{make_stratified_folds()}} for the non-spatial alternative;
 \code{\link[=select_gam_covariates]{select_gam_covariates()}}, which builds these folds internally.
