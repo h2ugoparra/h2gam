@@ -805,6 +805,8 @@ select_gam_covariates <- function(
   # The held-out level remap in forward_select() needs a factor; on a numeric
   # variable s(x, bs='re') is a penalised slope, not random intercepts, and the
   # remap would turn every held-out prediction into NA.
+  for (v in re_vars) if (!v %in% names(data))
+    stop(sprintf("random-effect term s(%s, bs='re'): column '%s' not found in data.", v, v))
   for (v in re_vars) if (!is.factor(data[[v]]))
     stop(sprintf(paste0("random-effect term s(%s, bs='re') needs '%s' to be a factor ",
                         "(numeric gives a penalised slope, not random intercepts); ",

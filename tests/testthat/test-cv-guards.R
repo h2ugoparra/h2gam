@@ -62,3 +62,10 @@ test_that("forward selection fails loudly when the baseline cannot be scored", {
                    knots = NULL, verbose = FALSE),
     "scored on only 0 of 3 CV folds")
 })
+
+test_that("a missing random-effect variable is reported as missing", {
+  df <- sim_counts()
+  df$year <- NULL
+  expect_error(run(df, structural = c("s(year, bs='re')", "te(lon, lat)")),
+               "column 'year' not found")
+})

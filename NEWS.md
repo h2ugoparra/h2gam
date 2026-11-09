@@ -4,9 +4,9 @@
 
 * A random-effect structural term such as `s(year, bs='re')` now requires its
   variable to be a factor; a numeric variable stops with an error asking you to
-  convert it. Previously every held-out CV prediction came back `NA`, so the
-  search silently selected nothing. The default `structural` includes
-  `s(year, bs='re')`.
+  convert it, and a missing column is reported as missing. Previously every
+  held-out CV prediction came back `NA`, so the search silently selected
+  nothing. The default `structural` includes `s(year, bs='re')`.
 * Spatial CV with `cv_metric = "euclidean"` and the default linkage now uses
   `"ward.D2"` (scikit-learn's Ward) instead of `hclust`'s legacy `"ward"`
   (`"ward.D"`), so fold assignments, and possibly selections, differ from
