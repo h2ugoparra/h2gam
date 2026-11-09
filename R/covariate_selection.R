@@ -867,7 +867,10 @@ select_gam_covariates <- function(
 
   # -- diagnostics plots ---------------------------------------------------
   grDevices::png(file.path(outdir, "selection_diagnostics.png"), width = 1400, height = 1100, res = 130)
-  tryCatch({ par(mfrow = c(2, 2)); gam.check(model) },
+  # gam.check() also prints convergence info and the k-index table; keep that
+  # in the console/log when verbose, swallow it otherwise.
+  tryCatch({ par(mfrow = c(2, 2))
+             if (verbose) gam.check(model) else utils::capture.output(gam.check(model)) },
            finally = grDevices::dev.off())
 
   grDevices::png(file.path(outdir, "partial_effects.png"), width = 1400, height = 1100, res = 130)
