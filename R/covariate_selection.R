@@ -228,6 +228,10 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #' affinity, and spectral clustering assigns folds. Folds are geographically
 #' separated and representative of covariate and label space.
 #'
+#' Stage 1 builds the full pairwise distance matrix, so memory and time grow
+#' with n^2 (roughly 8 * n^2 bytes for haversine: about 20 GB at n = 50,000).
+#' For large data, thin or aggregate the rows before building folds.
+#'
 #' @param data A data.frame with the coordinate, response, and covariate columns.
 #' @param response Name of the response column (block-mean view for stage 2).
 #' @param candidates Character vector of covariate names (numeric ones feed the
@@ -314,9 +318,25 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
   } else block_Xp <- block_X
 
   set.seed(seed)
-  km  <- function(m) stats::kmeans(m, centers = k, nstart = 10, iter.max = 100)$cluster
-  eye <- diag(k)
-  H   <- cbind(eye[km(block_coords), ], eye[km(block_Xp), ], eye[km(block_y), ])  # (B, 3k)
+  # k-means labels for one view. A view with <= k distinct rows (e.g. a rare
+  # response where most blocks have mean 0) can't take k centres: each distinct
+  # row is its own cluster. With > k distinct but heavily duplicated rows, a
+  # random start can still pick duplicate centres; fall back to clustering the
+  # distinct rows and mapping back.
+  km <- function(m) {
+    key <- do.call(paste, as.data.frame(m))
+    if (length(unique(key)) <= k) return(match(key, unique(key)))
+    tryCatch(stats::kmeans(m, centers = k, nstart = 10, iter.max = 100)$cluster,
+             error = function(e) {
+               u <- !duplicated(key)
+               stats::kmeans(m[u, , drop = FALSE], centers = k, nstart = 10,
+                             iter.max = 100)$cluster[match(key, key[u])]
+             })
+  }
+  eye   <- diag(k)
+  views <- list(block_coords, block_Xp, block_y)
+  views <- views[vapply(views, ncol, integer(1)) > 0]         # no numeric candidates -> no covariate view
+  H     <- do.call(cbind, lapply(views, function(m) eye[km(m), , drop = FALSE]))  # (B, views*k)
   S   <- H %*% t(H)
   S   <- (S + 1 / (B + 1)); S <- S / max(S)                  # floor for connectivity, normalise
 
@@ -393,7 +413,7 @@ univariate_screen <- function(data, candidates, na_max = 0.30) {
     if (na_frac > na_max) {
       dropped <- c(dropped, v); reason <- c(reason, sprintf("NA %.0f%%", 100 * na_frac)); next
     }
-    if (stats::sd(x, na.rm = TRUE) < sqrt(.Machine$double.eps)) {
+    if (!isTRUE(stats::sd(x[is.finite(x)]) >= sqrt(.Machine$double.eps))) {
       dropped <- c(dropped, v); reason <- c(reason, "zero variance"); next
     }
     keep <- c(keep, v)
@@ -430,8 +450,12 @@ spearman_clusters <- function(data, vars, thr = 0.7) {
 # repeated te()-smooth fits and predictions correlate ~0.99. Requires a fixed
 # shape family (see make_select_gen). Falls back to gam if bam errors.
 fit_search <- function(form, data, family_gen, knots) {
-  m <- tryCatch(bam(form, data = data, family = family_gen(),
-                    method = "fREML", discrete = TRUE, knots = knots),
+  m <- tryCatch(withCallingHandlers(
+                  bam(form, data = data, family = family_gen(),
+                      method = "fREML", discrete = TRUE, knots = knots),
+                  warning = function(w)   # e.g. structural-only model with no smooths
+                    if (grepl("no smooths, ignoring", conditionMessage(w)))
+                      invokeRestart("muffleWarning")),
                 error = function(e) NULL)
   if (is.null(m))
     m <- tryCatch(gam(form, data = data, family = family_gen(),
@@ -788,7 +812,10 @@ select_gam_covariates <- function(
   # would silently void every CV fold.
   need <- c(response, coords, scr$keep, offset,
             all.vars(stats::as.formula(paste("~", paste(structural, collapse = "+")))))
-  data <- data[stats::complete.cases(data[, intersect(need, names(data))]), ]
+  need <- intersect(need, names(data))
+  finite_ok <- vapply(data[need], function(x) !is.numeric(x) | is.finite(x),
+                      logical(nrow(data)))                   # complete.cases keeps Inf
+  data <- data[stats::complete.cases(data[, need]) & rowSums(!finite_ok) == 0, ]
 
   # SV squeeze applied HERE so the search sees the same (0,1) response as the
   # final fit -- raw 0/1 values give non-finite beta deviance in the CV scoring.
@@ -824,8 +851,8 @@ select_gam_covariates <- function(
 
   # -- decision table ------------------------------------------------------
   edf <- {
-    s <- summary(model)$s.table
-    stats::setNames(s[, "edf"], gsub("^s\\(|\\)$", "", rownames(s)))
+    s <- summary(model)$s.table                     # NULL when the model has no smooths
+    if (is.null(s)) numeric() else stats::setNames(s[, "edf"], gsub("^s\\(|\\)$", "", rownames(s)))
   }
   decision <- data.frame(
     covariate       = candidates,
@@ -871,7 +898,11 @@ select_gam_covariates <- function(
            finally = grDevices::dev.off())
 
   grDevices::png(file.path(outdir, "partial_effects.png"), width = 1400, height = 1100, res = 130)
-  tryCatch(plot(model, pages = 1, scale = 0, all.terms = TRUE, shade = TRUE),
+  # all.terms = TRUE hands parametric terms to termplot(), which evaluates
+  # model$call$data (the symbol `data`) in the formula's environment -- the
+  # global env, where `data` is utils::data. Give a plot-only copy the frame.
+  pmodel <- model; pmodel$call$data <- data
+  tryCatch(plot(pmodel, pages = 1, scale = 0, all.terms = TRUE, shade = TRUE),
            finally = grDevices::dev.off())
 
   final_formula <- paste(deparse(formula(model)), collapse = " ")
