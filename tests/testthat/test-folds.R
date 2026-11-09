@@ -69,3 +69,15 @@ test_that("fold builders leave the caller's RNG stream untouched", {
   expect_identical(make_stratified_folds(df, "y", k = 3, verbose = FALSE),
                    make_stratified_folds(df, "y", k = 3, verbose = FALSE))
 })
+
+test_that("make_spatial_folds maps legacy 'ward' to ward.D2 (sklearn Ward)", {
+  set.seed(5)
+  n  <- 150
+  df <- data.frame(x = runif(n, 0, 5e5), y = runif(n, 0, 5e5),
+                   x1 = rnorm(n), z = rnorm(n))
+  fold <- function(link) make_spatial_folds(df, "z", candidates = "x1", k = 3,
+                                            coords = c("x", "y"), metric = "euclidean",
+                                            linkage = link, verbose = FALSE)
+  expect_no_message(f_ward <- fold("ward"))   # no hclust "renamed to ward.D" message
+  expect_identical(f_ward, fold("ward.D2"))
+})
