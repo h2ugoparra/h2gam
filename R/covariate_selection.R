@@ -112,10 +112,12 @@ sv_squeeze <- function(y) {
 # DHARMa uniformity p-value (NA if the family can't be simulated).
 dharma_ks <- function(m) {
   if (!requireNamespace("DHARMa", quietly = TRUE)) return(NA_real_)
-  out <- tryCatch({
+  # suppressMessages: DHARMa message()s an "install mgcViz" notice on every gam
+  # simulation when mgcViz is absent, which would break verbose = FALSE.
+  out <- tryCatch(suppressMessages({
     sim <- DHARMa::simulateResiduals(m, n = 250, plot = FALSE)
     DHARMa::testUniformity(sim, plot = FALSE)$p.value
-  }, error = function(e) NA_real_)
+  }), error = function(e) NA_real_)
   out
 }
 
