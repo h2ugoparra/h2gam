@@ -8,10 +8,10 @@
 #      positive / gaussian branches), ranked by AIC alone; dispersion and
 #      residual uniformity are reported for inspection, not scored;
 #   2. forward-selects a DECORRELATED, prediction-relevant covariate subset,
-#      scored by spatial-block CV skill, with a concurvity gate and a BIC
-#      tie-break / 1-SE stopping rule;
-#   3. runs a bidirectional backward re-check, a final select=TRUE shrinkage
-#      fit, and adequacy diagnostics.
+#      scored by spatial-block CV skill, with a concurvity gate and a 1-SE
+#      stopping rule;
+#   3. runs a backward elimination re-check (BIC), a final select=TRUE
+#      shrinkage fit, and adequacy diagnostics.
 #
 # Every threshold is a logged, overridable argument; nothing is hardcoded to a
 # particular dataset. Structural (spatial/temporal) terms are forced in and not
@@ -112,10 +112,12 @@ sv_squeeze <- function(y) {
 # DHARMa uniformity p-value (NA if the family can't be simulated).
 dharma_ks <- function(m) {
   if (!requireNamespace("DHARMa", quietly = TRUE)) return(NA_real_)
-  out <- tryCatch({
+  # suppressMessages: DHARMa message()s an "install mgcViz" notice on every gam
+  # simulation when mgcViz is absent, which would break verbose = FALSE.
+  out <- tryCatch(suppressMessages({
     sim <- DHARMa::simulateResiduals(m, n = 250, plot = FALSE)
     DHARMa::testUniformity(sim, plot = FALSE)$p.value
-  }, error = function(e) NA_real_)
+  }), error = function(e) NA_real_)
   out
 }
 
@@ -171,6 +173,17 @@ suggest_family <- function(data, response, structural, knots, offset = NULL) {
        fit = fits[[chosen]])
 }
 
+# Generator for a user-supplied family OBJECT. Unlike a constructor, the object
+# is shared by every fit, and extended families (nb(), tw(), betar(), ...)
+# store their estimated theta in its environment, so each fit would start from
+# the previous fit's estimate. Reset theta to the supplied value before each use.
+family_object_gen <- function(family) {
+  if (!inherits(family, "extended.family") || !is.function(family$putTheta))
+    return(function() family)
+  th0 <- family$getTheta()
+  function() { family$putTheta(th0); family }
+}
+
 # Family generator with the shape parameter (Tweedie p / negbin theta) held
 # FIXED at its structural-only estimate. Re-estimating it on every CV fit is the
 # dominant cost of the search; fixing it gives a large speedup with negligible
@@ -204,6 +217,21 @@ make_select_gen <- function(chosen, free_gen, fit) {
        (cos(latr) %o% cos(latr)) * sin(outer(lonr, lonr, "-") / 2)^2
   root <- sqrt(a); root[root > 1] <- 1        # clamp in place (keeps matrix dims)
   2 * asin(root)
+}
+
+# Snapshot the caller's RNG state and return a function that restores it, so
+# the fold builders can set.seed() for reproducibility without overwriting the
+# user's random-number stream. Call it on entry, run the result on exit:
+#   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
+.rng_restorer <- function() {
+  env <- globalenv()
+  if (exists(".Random.seed", envir = env, inherits = FALSE)) {
+    old <- get(".Random.seed", envir = env, inherits = FALSE)
+    function() assign(".Random.seed", old, envir = env)
+  } else {
+    function() if (exists(".Random.seed", envir = env, inherits = FALSE))
+      rm(".Random.seed", envir = env)
+  }
 }
 
 # Normalised spectral clustering (Ng-Jordan-Weiss) on a precomputed affinity,
@@ -254,8 +282,10 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #'   proj string or EPSG code) used to reproject lon/lat to a planar system
 #'   before computing distances (needs the sf package). No projection is
 #'   assumed by default, so this function makes no study-area assumption.
-#' @param linkage AHC linkage method; `"ward"` is downgraded to `"average"`
-#'   for haversine, where it is invalid.
+#' @param linkage AHC linkage method, passed to [stats::hclust()]. `"ward"`
+#'   is taken as `"ward.D2"` (the Ward criterion on unsquared distances,
+#'   matching scikit-learn). Ward variants are downgraded to `"average"` for
+#'   haversine, where they are invalid.
 #' @param pca_var Fraction of variance retained when the stage-2 covariate
 #'   view is compressed by PCA.
 #' @param seed Random seed for the k-means / spectral steps.
@@ -270,12 +300,16 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
                                k = 10, metric = "haversine", threshold = NULL,
                                crs = NULL, linkage = "average", pca_var = 0.95,
                                seed = 42, verbose = TRUE) {
+  restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
   c1 <- data[[coords[1]]]; c2 <- data[[coords[2]]]           # coord 1 (x/lon), coord 2 (y/lat)
+  # hclust's "ward" is the legacy alias for "ward.D"; scikit-learn's Ward (which
+  # SPCV mirrors) is "ward.D2".
+  if (identical(linkage, "ward")) linkage <- "ward.D2"
 
   # -- Stage 1: AHC -> spatially coherent blocks --------------------------
   if (metric == "haversine") {
     dmat <- .haversine_dist(c2, c1); d <- stats::as.dist(dmat)  # (lat, lon) degrees
-    link <- if (linkage == "ward") "average" else linkage    # ward invalid for haversine
+    link <- if (startsWith(linkage, "ward")) "average" else linkage  # ward invalid for haversine
     thr  <- if (is.null(threshold)) stats::quantile(d, 0.10) else threshold * pi / 180
     loc  <- cbind(c2, c1)                                    # stage-2 location view (degrees)
   } else {
@@ -371,6 +405,7 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
 #'
 #' @export
 make_stratified_folds <- function(data, response, k = 5, seed = 1, verbose = TRUE) {
+  restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
   y <- data[[response]]
   # Strata: exact label values for a few-valued response (binary / integer
   # label), else quantile bins so a continuous response stays balanced too.
@@ -624,9 +659,9 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'    positive / gaussian branches), ranked by AIC alone;
 #' 2. forward-selects a decorrelated, prediction-relevant covariate subset,
 #'    scored by cross-validated held-out deviance (spatial-block or
-#'    response-stratified folds), with a concurvity gate and a BIC tie-break /
-#'    1-SE stopping rule;
-#' 3. runs a bidirectional backward re-check (BIC), a final `select = TRUE`
+#'    response-stratified folds), with a concurvity gate and a 1-SE stopping
+#'    rule;
+#' 3. runs a backward elimination re-check (BIC), a final `select = TRUE`
 #'    shrinkage fit, and adequacy diagnostics.
 #'
 #' Every threshold is a logged, overridable argument; nothing is hardcoded to
@@ -654,8 +689,11 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   inputs to the choice. Both are measured before covariate selection, so a
 #'   low `resid_ks_p` reflects not-yet-modelled covariates and structure as much
 #'   as the family -- re-check it on the final fit before acting on it.
-#'   Alternatively a family object or zero-argument family generator to skip
-#'   the suggestion step.
+#'   Alternatively a family object (e.g. `nb()`) or a zero-argument family
+#'   generator (e.g. `nb`) to skip the suggestion step. For a family object
+#'   with an estimated shape parameter, theta is reset to its supplied value
+#'   before every fit, and the object is modified in place by the fits; pass
+#'   the constructor instead to leave your object untouched.
 #' @param concurvity_max Reject a candidate whose worst pairwise concurvity
 #'   against the already-accepted covariate smooths exceeds this (structural
 #'   terms excluded from the gate).
@@ -681,8 +719,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the question entirely.
 #' @param cv_threshold SPCV AHC block threshold (`NULL` = 10th percentile of
 #'   pairwise distances).
-#' @param cv_linkage SPCV AHC linkage (`"ward"` downgraded to `"average"` for
-#'   haversine).
+#' @param cv_linkage SPCV AHC linkage (`"ward.D2"` default; Ward variants are
+#'   downgraded to `"average"` for haversine). See [make_spatial_folds()].
 #' @param knots mgcv per-smooth knot positions, passed to every `gam()`/`bam()`
 #'   fit. Mainly the cyclic boundary for `s(month, bs='cc')`: pass
 #'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
@@ -744,7 +782,7 @@ select_gam_covariates <- function(
     cv_metric      = "haversine",
     cv_crs         = NULL,
     cv_threshold   = NULL,
-    cv_linkage     = "ward",
+    cv_linkage     = "ward.D2",
     knots          = NULL,
     offset         = NULL,
     outdir         = ".",
@@ -790,7 +828,7 @@ select_gam_covariates <- function(
     if (verbose) { cat("\n== Family suggestion ==\n"); print(fs$table)
       cat(sprintf("-> chosen: %s%s\n", fs$chosen, if (squeeze) " (SV squeeze)" else "")) }
   } else {
-    family_gen <- if (is.function(family)) function() family() else function() family
+    family_gen <- if (is.function(family)) function() family() else family_object_gen(family)
     squeeze <- FALSE; fs <- list(chosen = "user", table = NULL, fit = NULL,
                                  profile = profile_response(data[[response]]))
   }
@@ -894,7 +932,10 @@ select_gam_covariates <- function(
 
   # -- diagnostics plots ---------------------------------------------------
   grDevices::png(file.path(outdir, "selection_diagnostics.png"), width = 1400, height = 1100, res = 130)
-  tryCatch({ par(mfrow = c(2, 2)); gam.check(model) },
+  # gam.check() also prints convergence info and the k-index table; keep that
+  # in the console/log when verbose, swallow it otherwise.
+  tryCatch({ par(mfrow = c(2, 2))
+             if (verbose) gam.check(model) else utils::capture.output(gam.check(model)) },
            finally = grDevices::dev.off())
 
   grDevices::png(file.path(outdir, "partial_effects.png"), width = 1400, height = 1100, res = 130)

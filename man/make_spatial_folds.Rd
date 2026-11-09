@@ -50,8 +50,10 @@ proj string or EPSG code) used to reproject lon/lat to a planar system
 before computing distances (needs the sf package). No projection is
 assumed by default, so this function makes no study-area assumption.}
 
-\item{linkage}{AHC linkage method; \code{"ward"} is downgraded to \code{"average"}
-for haversine, where it is invalid.}
+\item{linkage}{AHC linkage method, passed to \code{\link[stats:hclust]{stats::hclust()}}. \code{"ward"}
+is taken as \code{"ward.D2"} (the Ward criterion on unsquared distances,
+matching scikit-learn). Ward variants are downgraded to \code{"average"} for
+haversine, where they are invalid.}
 
 \item{pca_var}{Fraction of variance retained when the stage-2 covariate
 view is compressed by PCA.}
