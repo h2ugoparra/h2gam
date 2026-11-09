@@ -19,7 +19,7 @@ select_gam_covariates(
   cv_metric = "haversine",
   cv_crs = NULL,
   cv_threshold = NULL,
-  cv_linkage = "ward",
+  cv_linkage = "ward.D2",
   knots = NULL,
   offset = NULL,
   outdir = ".",
@@ -88,8 +88,8 @@ the question entirely.}
 \item{cv_threshold}{SPCV AHC block threshold (\code{NULL} = 10th percentile of
 pairwise distances).}
 
-\item{cv_linkage}{SPCV AHC linkage (\code{"ward"} downgraded to \code{"average"} for
-haversine).}
+\item{cv_linkage}{SPCV AHC linkage (\code{"ward.D2"} default; Ward variants are
+downgraded to \code{"average"} for haversine). See \code{\link[=make_spatial_folds]{make_spatial_folds()}}.}
 
 \item{knots}{mgcv per-smooth knot positions, passed to every \code{gam()}/\code{bam()}
 fit. Mainly the cyclic boundary for \code{s(month, bs='cc')}: pass
