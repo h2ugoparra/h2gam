@@ -27,3 +27,19 @@ test_that("select_gam_covariates recovers true drivers and a count family", {
   expect_match(res$family, "nb|poisson|tw") # non-negative count family
   expect_s3_class(res$model, "gam")
 })
+
+test_that("a user family object starts every fit from its supplied theta", {
+  set.seed(3)
+  x <- rnorm(200)
+  y <- rnbinom(200, mu = exp(1 + sin(x)), size = 2)
+  f   <- nb()
+  gen <- family_object_gen(f)
+  th0 <- f$getTheta()
+
+  gam(y ~ s(x), family = gen())          # fit mutates the shared object's theta
+  expect_false(isTRUE(all.equal(f$getTheta(), th0)))
+  expect_equal(gen()$getTheta(), th0)    # next fit starts fresh again
+
+  # plain families pass through unchanged
+  expect_identical(family_object_gen(poisson())(), poisson())
+})

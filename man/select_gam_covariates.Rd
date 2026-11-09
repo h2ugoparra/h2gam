@@ -19,7 +19,7 @@ select_gam_covariates(
   cv_metric = "haversine",
   cv_crs = NULL,
   cv_threshold = NULL,
-  cv_linkage = "ward",
+  cv_linkage = "ward.D2",
   knots = NULL,
   offset = NULL,
   outdir = ".",
@@ -49,8 +49,11 @@ lowest-AIC candidate that fits on the structural-only model. The reported
 inputs to the choice. Both are measured before covariate selection, so a
 low \code{resid_ks_p} reflects not-yet-modelled covariates and structure as much
 as the family -- re-check it on the final fit before acting on it.
-Alternatively a family object or zero-argument family generator to skip
-the suggestion step.}
+Alternatively a family object (e.g. \code{nb()}) or a zero-argument family
+generator (e.g. \code{nb}) to skip the suggestion step. For a family object
+with an estimated shape parameter, theta is reset to its supplied value
+before every fit, and the object is modified in place by the fits; pass
+the constructor instead to leave your object untouched.}
 
 \item{concurvity_max}{Reject a candidate whose worst pairwise concurvity
 against the already-accepted covariate smooths exceeds this (structural
@@ -85,8 +88,8 @@ the question entirely.}
 \item{cv_threshold}{SPCV AHC block threshold (\code{NULL} = 10th percentile of
 pairwise distances).}
 
-\item{cv_linkage}{SPCV AHC linkage (\code{"ward"} downgraded to \code{"average"} for
-haversine).}
+\item{cv_linkage}{SPCV AHC linkage (\code{"ward.D2"} default; Ward variants are
+downgraded to \code{"average"} for haversine). See \code{\link[=make_spatial_folds]{make_spatial_folds()}}.}
 
 \item{knots}{mgcv per-smooth knot positions, passed to every \code{gam()}/\code{bam()}
 fit. Mainly the cyclic boundary for \code{s(month, bs='cc')}: pass
