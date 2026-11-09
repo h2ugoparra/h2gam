@@ -2,3 +2,5 @@
 ^\.gitignore$
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^CLAUDE\.md$
+^docs$

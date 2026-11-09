@@ -5,8 +5,8 @@ Automated GAM covariate validation & selection for [mgcv](https://cran.r-project
 Given a response and a pool of candidate covariates, `select_gam_covariates()`:
 
 1. **Profiles the response** and auto-suggests a family (count / proportion / positive / gaussian branches), ranked by AIC. Dispersion and a DHARMa residual-uniformity p-value are reported alongside for you to inspect, but do not affect the choice — and since both are measured on the structural-only model, a low `resid_ks_p` reflects not-yet-modelled covariates and structure as much as the family. Re-check it on the final fit before acting on it.
-2. **Forward-selects** a decorrelated, prediction-relevant covariate subset, scored by random/spatial-block CV skill, with a concurvity gate and a BIC tie-break / 1-SE stopping rule. Fold construction is set by `cv_scheme`: `"spatial"` (block CV, the default) or `"stratified"` — random k-fold stratified on the response, for binomial / low-prevalence targets where spatial blocks would leave folds with too few positives.
-3. Runs a **bidirectional backward re-check**, a final `select=TRUE` shrinkage fit, and adequacy diagnostics.
+2. **Forward-selects** a decorrelated, prediction-relevant covariate subset, scored by random/spatial-block CV skill, with a concurvity gate and a 1-SE stopping rule. Fold construction is set by `cv_scheme`: `"spatial"` (block CV, the default) or `"stratified"` — random k-fold stratified on the response, for binomial / low-prevalence targets where spatial blocks would leave folds with too few positives.
+3. Runs a **backward elimination re-check** (BIC), a final `select=TRUE` shrinkage fit, and adequacy diagnostics.
 
 Every threshold is a logged, overridable argument; nothing is hardcoded to a particular dataset. Structural (spatial/temporal) terms are forced in and not screened — covariates must earn their place over and above them.
 
@@ -17,12 +17,14 @@ Every threshold is a logged, overridable argument; nothing is hardcoded to a par
 remotes::install_github("h2ugoparra/h2gam")
 ```
 
-Pin a release for reproducibility, e.g. `remotes::install_github("h2ugoparra/h2gam@v0.1.0")`.
+Pin a release for reproducibility, e.g. `remotes::install_github("h2ugoparra/h2gam@v0.3.0")`.
 
 ## Usage
 
 ```r
 library(h2gam)
+
+df$year <- factor(df$year)   # random-effect terms (bs = 're') need a factor
 
 res <- select_gam_covariates(
   data       = df,
@@ -36,6 +38,8 @@ res <- select_gam_covariates(
 
 saveRDS(res$model, "output/my_target/gam_model.rds")
 ```
+
+The variable in a random-effect structural term such as `s(year, bs='re')` must be a factor. On a numeric variable mgcv fits a penalised slope instead of random intercepts, so `select_gam_covariates()` stops with an error asking you to convert it. The default `structural` includes `s(year, bs='re')`, so this applies whenever you rely on the defaults.
 
 Each project keeps its own short driver script (data loading, preprocessing, target list); the selection logic lives here. See `?select_gam_covariates` for the full argument reference and a runnable synthetic example, or `inst/examples/synthetic_demo.R` for a self-contained end-to-end demo.
 

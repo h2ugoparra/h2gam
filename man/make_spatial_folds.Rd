@@ -50,8 +50,10 @@ proj string or EPSG code) used to reproject lon/lat to a planar system
 before computing distances (needs the sf package). No projection is
 assumed by default, so this function makes no study-area assumption.}
 
-\item{linkage}{AHC linkage method; \code{"ward"} is downgraded to \code{"average"}
-for haversine, where it is invalid.}
+\item{linkage}{AHC linkage method, passed to \code{\link[stats:hclust]{stats::hclust()}}. \code{"ward"}
+is taken as \code{"ward.D2"} (the Ward criterion on unsquared distances,
+matching scikit-learn). Ward variants are downgraded to \code{"average"} for
+haversine, where they are invalid.}
 
 \item{pca_var}{Fraction of variance retained when the stage-2 covariate
 view is compressed by PCA.}
@@ -72,6 +74,11 @@ per-block means of location, covariates, and response are each k-means
 clustered, the one-hot memberships are stacked into a co-occurrence
 affinity, and spectral clustering assigns folds. Folds are geographically
 separated and representative of covariate and label space.
+}
+\details{
+Stage 1 builds the full pairwise distance matrix, so memory and time grow
+with n^2 (roughly 8 * n^2 bytes for haversine: about 20 GB at n = 50,000).
+For large data, thin or aggregate the rows before building folds.
 }
 \seealso{
 \code{\link[=make_stratified_folds]{make_stratified_folds()}} for the non-spatial alternative;

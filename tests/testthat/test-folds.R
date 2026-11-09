@@ -53,3 +53,31 @@ test_that("make_spatial_folds (euclidean, crs=NULL) uses planar coords as-is", {
   expect_length(folds, n)
   expect_setequal(unique(folds), 1:4)
 })
+
+test_that("fold builders leave the caller's RNG stream untouched", {
+  df <- data.frame(lon = runif(120, -20, -5), lat = runif(120, 35, 50),
+                   x1 = rnorm(120), y = rbinom(120, 1, 0.3))
+  draw_after <- function(f) { set.seed(99); invisible(f()); runif(1) }
+  set.seed(99); expected <- runif(1)
+
+  expect_identical(draw_after(function()
+    make_stratified_folds(df, "y", k = 3, verbose = FALSE)), expected)
+  expect_identical(draw_after(function()
+    make_spatial_folds(df, "y", candidates = "x1", k = 3, verbose = FALSE)), expected)
+
+  # and folds are still reproducible from their own seed
+  expect_identical(make_stratified_folds(df, "y", k = 3, verbose = FALSE),
+                   make_stratified_folds(df, "y", k = 3, verbose = FALSE))
+})
+
+test_that("make_spatial_folds maps legacy 'ward' to ward.D2 (sklearn Ward)", {
+  set.seed(5)
+  n  <- 150
+  df <- data.frame(x = runif(n, 0, 5e5), y = runif(n, 0, 5e5),
+                   x1 = rnorm(n), z = rnorm(n))
+  fold <- function(link) make_spatial_folds(df, "z", candidates = "x1", k = 3,
+                                            coords = c("x", "y"), metric = "euclidean",
+                                            linkage = link, verbose = FALSE)
+  expect_no_message(f_ward <- fold("ward"))   # no hclust "renamed to ward.D" message
+  expect_identical(f_ward, fold("ward.D2"))
+})

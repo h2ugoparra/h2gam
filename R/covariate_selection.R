@@ -8,10 +8,10 @@
 #      positive / gaussian branches), ranked by AIC alone; dispersion and
 #      residual uniformity are reported for inspection, not scored;
 #   2. forward-selects a DECORRELATED, prediction-relevant covariate subset,
-#      scored by spatial-block CV skill, with a concurvity gate and a BIC
-#      tie-break / 1-SE stopping rule;
-#   3. runs a bidirectional backward re-check, a final select=TRUE shrinkage
-#      fit, and adequacy diagnostics.
+#      scored by spatial-block CV skill, with a concurvity gate and a 1-SE
+#      stopping rule;
+#   3. runs a backward elimination re-check (BIC), a final select=TRUE
+#      shrinkage fit, and adequacy diagnostics.
 #
 # Every threshold is a logged, overridable argument; nothing is hardcoded to a
 # particular dataset. Structural (spatial/temporal) terms are forced in and not
@@ -112,10 +112,12 @@ sv_squeeze <- function(y) {
 # DHARMa uniformity p-value (NA if the family can't be simulated).
 dharma_ks <- function(m) {
   if (!requireNamespace("DHARMa", quietly = TRUE)) return(NA_real_)
-  out <- tryCatch({
+  # suppressMessages: DHARMa message()s an "install mgcViz" notice on every gam
+  # simulation when mgcViz is absent, which would break verbose = FALSE.
+  out <- tryCatch(suppressMessages({
     sim <- DHARMa::simulateResiduals(m, n = 250, plot = FALSE)
     DHARMa::testUniformity(sim, plot = FALSE)$p.value
-  }, error = function(e) NA_real_)
+  }), error = function(e) NA_real_)
   out
 }
 
@@ -171,6 +173,17 @@ suggest_family <- function(data, response, structural, knots, offset = NULL) {
        fit = fits[[chosen]])
 }
 
+# Generator for a user-supplied family OBJECT. Unlike a constructor, the object
+# is shared by every fit, and extended families (nb(), tw(), betar(), ...)
+# store their estimated theta in its environment, so each fit would start from
+# the previous fit's estimate. Reset theta to the supplied value before each use.
+family_object_gen <- function(family) {
+  if (!inherits(family, "extended.family") || !is.function(family$putTheta))
+    return(function() family)
+  th0 <- family$getTheta()
+  function() { family$putTheta(th0); family }
+}
+
 # Family generator with the shape parameter (Tweedie p / negbin theta) held
 # FIXED at its structural-only estimate. Re-estimating it on every CV fit is the
 # dominant cost of the search; fixing it gives a large speedup with negligible
@@ -206,6 +219,21 @@ make_select_gen <- function(chosen, free_gen, fit) {
   2 * asin(root)
 }
 
+# Snapshot the caller's RNG state and return a function that restores it, so
+# the fold builders can set.seed() for reproducibility without overwriting the
+# user's random-number stream. Call it on entry, run the result on exit:
+#   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
+.rng_restorer <- function() {
+  env <- globalenv()
+  if (exists(".Random.seed", envir = env, inherits = FALSE)) {
+    old <- get(".Random.seed", envir = env, inherits = FALSE)
+    function() assign(".Random.seed", old, envir = env)
+  } else {
+    function() if (exists(".Random.seed", envir = env, inherits = FALSE))
+      rm(".Random.seed", envir = env)
+  }
+}
+
 # Normalised spectral clustering (Ng-Jordan-Weiss) on a precomputed affinity,
 # matching sklearn SpectralClustering(affinity="precomputed", assign_labels="kmeans").
 .spectral_cluster <- function(S, k, seed) {
@@ -227,6 +255,10 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #' clustered, the one-hot memberships are stacked into a co-occurrence
 #' affinity, and spectral clustering assigns folds. Folds are geographically
 #' separated and representative of covariate and label space.
+#'
+#' Stage 1 builds the full pairwise distance matrix, so memory and time grow
+#' with n^2 (roughly 8 * n^2 bytes for haversine: about 20 GB at n = 50,000).
+#' For large data, thin or aggregate the rows before building folds.
 #'
 #' @param data A data.frame with the coordinate, response, and covariate columns.
 #' @param response Name of the response column (block-mean view for stage 2).
@@ -250,8 +282,10 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #'   proj string or EPSG code) used to reproject lon/lat to a planar system
 #'   before computing distances (needs the sf package). No projection is
 #'   assumed by default, so this function makes no study-area assumption.
-#' @param linkage AHC linkage method; `"ward"` is downgraded to `"average"`
-#'   for haversine, where it is invalid.
+#' @param linkage AHC linkage method, passed to [stats::hclust()]. `"ward"`
+#'   is taken as `"ward.D2"` (the Ward criterion on unsquared distances,
+#'   matching scikit-learn). Ward variants are downgraded to `"average"` for
+#'   haversine, where they are invalid.
 #' @param pca_var Fraction of variance retained when the stage-2 covariate
 #'   view is compressed by PCA.
 #' @param seed Random seed for the k-means / spectral steps.
@@ -266,12 +300,16 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
                                k = 10, metric = "haversine", threshold = NULL,
                                crs = NULL, linkage = "average", pca_var = 0.95,
                                seed = 42, verbose = TRUE) {
+  restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
   c1 <- data[[coords[1]]]; c2 <- data[[coords[2]]]           # coord 1 (x/lon), coord 2 (y/lat)
+  # hclust's "ward" is the legacy alias for "ward.D"; scikit-learn's Ward (which
+  # SPCV mirrors) is "ward.D2".
+  if (identical(linkage, "ward")) linkage <- "ward.D2"
 
   # -- Stage 1: AHC -> spatially coherent blocks --------------------------
   if (metric == "haversine") {
     dmat <- .haversine_dist(c2, c1); d <- stats::as.dist(dmat)  # (lat, lon) degrees
-    link <- if (linkage == "ward") "average" else linkage    # ward invalid for haversine
+    link <- if (startsWith(linkage, "ward")) "average" else linkage  # ward invalid for haversine
     thr  <- if (is.null(threshold)) stats::quantile(d, 0.10) else threshold * pi / 180
     loc  <- cbind(c2, c1)                                    # stage-2 location view (degrees)
   } else {
@@ -314,9 +352,25 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
   } else block_Xp <- block_X
 
   set.seed(seed)
-  km  <- function(m) stats::kmeans(m, centers = k, nstart = 10, iter.max = 100)$cluster
-  eye <- diag(k)
-  H   <- cbind(eye[km(block_coords), ], eye[km(block_Xp), ], eye[km(block_y), ])  # (B, 3k)
+  # k-means labels for one view. A view with <= k distinct rows (e.g. a rare
+  # response where most blocks have mean 0) can't take k centres: each distinct
+  # row is its own cluster. With > k distinct but heavily duplicated rows, a
+  # random start can still pick duplicate centres; fall back to clustering the
+  # distinct rows and mapping back.
+  km <- function(m) {
+    key <- do.call(paste, as.data.frame(m))
+    if (length(unique(key)) <= k) return(match(key, unique(key)))
+    tryCatch(stats::kmeans(m, centers = k, nstart = 10, iter.max = 100)$cluster,
+             error = function(e) {
+               u <- !duplicated(key)
+               stats::kmeans(m[u, , drop = FALSE], centers = k, nstart = 10,
+                             iter.max = 100)$cluster[match(key, key[u])]
+             })
+  }
+  eye   <- diag(k)
+  views <- list(block_coords, block_Xp, block_y)
+  views <- views[vapply(views, ncol, integer(1)) > 0]         # no numeric candidates -> no covariate view
+  H     <- do.call(cbind, lapply(views, function(m) eye[km(m), , drop = FALSE]))  # (B, views*k)
   S   <- H %*% t(H)
   S   <- (S + 1 / (B + 1)); S <- S / max(S)                  # floor for connectivity, normalise
 
@@ -351,6 +405,7 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
 #'
 #' @export
 make_stratified_folds <- function(data, response, k = 5, seed = 1, verbose = TRUE) {
+  restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
   y <- data[[response]]
   # Strata: exact label values for a few-valued response (binary / integer
   # label), else quantile bins so a continuous response stays balanced too.
@@ -393,7 +448,7 @@ univariate_screen <- function(data, candidates, na_max = 0.30) {
     if (na_frac > na_max) {
       dropped <- c(dropped, v); reason <- c(reason, sprintf("NA %.0f%%", 100 * na_frac)); next
     }
-    if (stats::sd(x, na.rm = TRUE) < sqrt(.Machine$double.eps)) {
+    if (!isTRUE(stats::sd(x[is.finite(x)]) >= sqrt(.Machine$double.eps))) {
       dropped <- c(dropped, v); reason <- c(reason, "zero variance"); next
     }
     keep <- c(keep, v)
@@ -430,8 +485,12 @@ spearman_clusters <- function(data, vars, thr = 0.7) {
 # repeated te()-smooth fits and predictions correlate ~0.99. Requires a fixed
 # shape family (see make_select_gen). Falls back to gam if bam errors.
 fit_search <- function(form, data, family_gen, knots) {
-  m <- tryCatch(bam(form, data = data, family = family_gen(),
-                    method = "fREML", discrete = TRUE, knots = knots),
+  m <- tryCatch(withCallingHandlers(
+                  bam(form, data = data, family = family_gen(),
+                      method = "fREML", discrete = TRUE, knots = knots),
+                  warning = function(w)   # e.g. structural-only model with no smooths
+                    if (grepl("no smooths, ignoring", conditionMessage(w)))
+                      invokeRestart("muffleWarning")),
                 error = function(e) NULL)
   if (is.null(m))
     m <- tryCatch(gam(form, data = data, family = family_gen(),
@@ -491,13 +550,23 @@ forward_select <- function(data, response, candidates, structural, family_gen,
   accepted  <- character()
   remaining <- candidates
   cur_dev   <- fold_dev(accepted)          # structural-only baseline
+  # A fold is skipped (NA) when its fit, prediction, or deviance fails. Without
+  # a scorable baseline every candidate would just look like "no CV improvement",
+  # so fail loudly instead.
+  if (sum(is.finite(cur_dev)) < 2)
+    stop(sprintf(paste0("forward selection: the structural-only model could be scored on ",
+                        "only %d of %d CV folds (fit/prediction failed or non-finite ",
+                        "deviance); check for NA/invalid values in the model variables."),
+                 sum(is.finite(cur_dev)), length(cur_dev)))
   path      <- list()
   step      <- 0
+  low_folds <- character()                 # candidates scored on < half the folds
 
   repeat {
     step <- step + 1
     scored <- lapply(remaining, function(v) {
       cd   <- fold_dev(c(accepted, v))
+      if (sum(is.finite(cd)) < length(cd) / 2) low_folds <<- union(low_folds, v)
       diff <- cur_dev - cd                 # paired per-fold improvement
       list(v = v, cd = cd,
            mean = mean(diff, na.rm = TRUE),
@@ -531,6 +600,10 @@ forward_select <- function(data, response, candidates, structural, family_gen,
     cur_dev   <- picked$cd
     if (length(remaining) == 0) break
   }
+
+  if (length(low_folds))
+    warning(sprintf("forward selection: %s could be scored on fewer than half the CV folds (fit/prediction failures); their CV gain is unreliable.",
+                    paste(low_folds, collapse = ", ")), call. = FALSE)
 
   list(accepted = accepted,
        path = if (length(path)) do.call(rbind, path) else NULL)
@@ -586,9 +659,9 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'    positive / gaussian branches), ranked by AIC alone;
 #' 2. forward-selects a decorrelated, prediction-relevant covariate subset,
 #'    scored by cross-validated held-out deviance (spatial-block or
-#'    response-stratified folds), with a concurvity gate and a BIC tie-break /
-#'    1-SE stopping rule;
-#' 3. runs a bidirectional backward re-check (BIC), a final `select = TRUE`
+#'    response-stratified folds), with a concurvity gate and a 1-SE stopping
+#'    rule;
+#' 3. runs a backward elimination re-check (BIC), a final `select = TRUE`
 #'    shrinkage fit, and adequacy diagnostics.
 #'
 #' Every threshold is a logged, overridable argument; nothing is hardcoded to
@@ -616,8 +689,11 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   inputs to the choice. Both are measured before covariate selection, so a
 #'   low `resid_ks_p` reflects not-yet-modelled covariates and structure as much
 #'   as the family -- re-check it on the final fit before acting on it.
-#'   Alternatively a family object or zero-argument family generator to skip
-#'   the suggestion step.
+#'   Alternatively a family object (e.g. `nb()`) or a zero-argument family
+#'   generator (e.g. `nb`) to skip the suggestion step. For a family object
+#'   with an estimated shape parameter, theta is reset to its supplied value
+#'   before every fit, and the object is modified in place by the fits; pass
+#'   the constructor instead to leave your object untouched.
 #' @param concurvity_max Reject a candidate whose worst pairwise concurvity
 #'   against the already-accepted covariate smooths exceeds this (structural
 #'   terms excluded from the gate).
@@ -643,8 +719,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the question entirely.
 #' @param cv_threshold SPCV AHC block threshold (`NULL` = 10th percentile of
 #'   pairwise distances).
-#' @param cv_linkage SPCV AHC linkage (`"ward"` downgraded to `"average"` for
-#'   haversine).
+#' @param cv_linkage SPCV AHC linkage (`"ward.D2"` default; Ward variants are
+#'   downgraded to `"average"` for haversine). See [make_spatial_folds()].
 #' @param knots mgcv per-smooth knot positions, passed to every `gam()`/`bam()`
 #'   fit. Mainly the cyclic boundary for `s(month, bs='cc')`: pass
 #'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
@@ -706,7 +782,7 @@ select_gam_covariates <- function(
     cv_metric      = "haversine",
     cv_crs         = NULL,
     cv_threshold   = NULL,
-    cv_linkage     = "ward",
+    cv_linkage     = "ward.D2",
     knots          = NULL,
     offset         = NULL,
     outdir         = ".",
@@ -716,6 +792,25 @@ select_gam_covariates <- function(
 
   stopifnot(response %in% names(data))
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
+  if (!is.null(offset)) {
+    if (!offset %in% names(data)) stop(sprintf("offset column '%s' not found in data.", offset))
+    if (any(data[[offset]] <= 0, na.rm = TRUE))
+      stop(sprintf("offset column '%s' must be > 0 (it enters as log(%s)).", offset, offset))
+  }
+
+  # random-effect structural terms -> excluded from held-out CV prediction
+  re_terms  <- structural[grepl("bs\\s*=\\s*['\"]re['\"]", structural)]
+  re_vars   <- sub("^\\s*s\\(\\s*([A-Za-z0-9_.]+).*", "\\1", re_terms)
+  re_labels <- if (length(re_vars)) paste0("s(", re_vars, ")") else character()
+  # The held-out level remap in forward_select() needs a factor; on a numeric
+  # variable s(x, bs='re') is a penalised slope, not random intercepts, and the
+  # remap would turn every held-out prediction into NA.
+  for (v in re_vars) if (!v %in% names(data))
+    stop(sprintf("random-effect term s(%s, bs='re'): column '%s' not found in data.", v, v))
+  for (v in re_vars) if (!is.factor(data[[v]]))
+    stop(sprintf(paste0("random-effect term s(%s, bs='re') needs '%s' to be a factor ",
+                        "(numeric gives a penalised slope, not random intercepts); ",
+                        "convert it first, e.g. data$%s <- factor(data$%s)."), v, v, v, v))
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
   # Optional run log: tee all console output to outdir/logfile. All progress
@@ -735,7 +830,7 @@ select_gam_covariates <- function(
     if (verbose) { cat("\n== Family suggestion ==\n"); print(fs$table)
       cat(sprintf("-> chosen: %s%s\n", fs$chosen, if (squeeze) " (SV squeeze)" else "")) }
   } else {
-    family_gen <- if (is.function(family)) function() family() else function() family
+    family_gen <- if (is.function(family)) function() family() else family_object_gen(family)
     squeeze <- FALSE; fs <- list(chosen = "user", table = NULL, fit = NULL,
                                  profile = profile_response(data[[response]]))
   }
@@ -747,10 +842,20 @@ select_gam_covariates <- function(
   if (verbose) cat(sprintf("\n== Univariate screen ==\n  kept %d, dropped %d\n",
                            length(scr$keep), length(scr$dropped)))
 
-  # complete-case on the comparison columns so every CV model sees the same rows
-  need <- c(response, coords, scr$keep,
+  # NA fraction on the data as supplied (before the complete-case filter below,
+  # which would otherwise make it 0 for every screened-in candidate)
+  na_frac <- vapply(candidates, function(v)
+    if (v %in% names(data)) mean(is.na(data[[v]])) else NA_real_, numeric(1))
+
+  # complete-case on the comparison columns so every CV model sees the same rows.
+  # The offset is included: an NA offset gives NA held-out predictions, which
+  # would silently void every CV fold.
+  need <- c(response, coords, scr$keep, offset,
             all.vars(stats::as.formula(paste("~", paste(structural, collapse = "+")))))
-  data <- data[stats::complete.cases(data[, intersect(need, names(data))]), ]
+  need <- intersect(need, names(data))
+  finite_ok <- vapply(data[need], function(x) !is.numeric(x) | is.finite(x),
+                      logical(nrow(data)))                   # complete.cases keeps Inf
+  data <- data[stats::complete.cases(data[, need]) & rowSums(!finite_ok) == 0, ]
 
   # SV squeeze applied HERE so the search sees the same (0,1) response as the
   # final fit -- raw 0/1 values give non-finite beta deviance in the CV scoring.
@@ -767,11 +872,6 @@ select_gam_covariates <- function(
                        metric = cv_metric, threshold = cv_threshold, crs = cv_crs,
                        linkage = cv_linkage, seed = seed, verbose = verbose)
   }
-
-  # random-effect structural terms -> excluded from held-out CV prediction
-  re_terms  <- structural[grepl("bs\\s*=\\s*['\"]re['\"]", structural)]
-  re_vars   <- sub("^\\s*s\\(\\s*([A-Za-z0-9_.]+).*", "\\1", re_terms)
-  re_labels <- if (length(re_vars)) paste0("s(", re_vars, ")") else character()
 
   # -- forward selection ---------------------------------------------------
   if (verbose) cat("\n== Forward selection (CV-scored, concurvity-gated) ==\n")
@@ -791,13 +891,12 @@ select_gam_covariates <- function(
 
   # -- decision table ------------------------------------------------------
   edf <- {
-    s <- summary(model)$s.table
-    stats::setNames(s[, "edf"], gsub("^s\\(|\\)$", "", rownames(s)))
+    s <- summary(model)$s.table                     # NULL when the model has no smooths
+    if (is.null(s)) numeric() else stats::setNames(s[, "edf"], gsub("^s\\(|\\)$", "", rownames(s)))
   }
   decision <- data.frame(
     covariate       = candidates,
-    na_frac         = sapply(candidates, function(v)
-                        if (v %in% names(data)) mean(is.na(data[[v]])) else NA),
+    na_frac         = na_frac,
     spearman_cluster= clusters[candidates],
     entry_step      = NA_integer_,
     concurvity      = NA_real_,
@@ -835,11 +934,18 @@ select_gam_covariates <- function(
 
   # -- diagnostics plots ---------------------------------------------------
   grDevices::png(file.path(outdir, "selection_diagnostics.png"), width = 1400, height = 1100, res = 130)
-  tryCatch({ par(mfrow = c(2, 2)); gam.check(model) },
+  # gam.check() also prints convergence info and the k-index table; keep that
+  # in the console/log when verbose, swallow it otherwise.
+  tryCatch({ par(mfrow = c(2, 2))
+             if (verbose) gam.check(model) else utils::capture.output(gam.check(model)) },
            finally = grDevices::dev.off())
 
   grDevices::png(file.path(outdir, "partial_effects.png"), width = 1400, height = 1100, res = 130)
-  tryCatch(plot(model, pages = 1, scale = 0, all.terms = TRUE, shade = TRUE),
+  # all.terms = TRUE hands parametric terms to termplot(), which evaluates
+  # model$call$data (the symbol `data`) in the formula's environment -- the
+  # global env, where `data` is utils::data. Give a plot-only copy the frame.
+  pmodel <- model; pmodel$call$data <- data
+  tryCatch(plot(pmodel, pages = 1, scale = 0, all.terms = TRUE, shade = TRUE),
            finally = grDevices::dev.off())
 
   final_formula <- paste(deparse(formula(model)), collapse = " ")
