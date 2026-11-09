@@ -206,6 +206,21 @@ make_select_gen <- function(chosen, free_gen, fit) {
   2 * asin(root)
 }
 
+# Snapshot the caller's RNG state and return a function that restores it, so
+# the fold builders can set.seed() for reproducibility without overwriting the
+# user's random-number stream. Call it on entry, run the result on exit:
+#   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
+.rng_restorer <- function() {
+  env <- globalenv()
+  if (exists(".Random.seed", envir = env, inherits = FALSE)) {
+    old <- get(".Random.seed", envir = env, inherits = FALSE)
+    function() assign(".Random.seed", old, envir = env)
+  } else {
+    function() if (exists(".Random.seed", envir = env, inherits = FALSE))
+      rm(".Random.seed", envir = env)
+  }
+}
+
 # Normalised spectral clustering (Ng-Jordan-Weiss) on a precomputed affinity,
 # matching sklearn SpectralClustering(affinity="precomputed", assign_labels="kmeans").
 .spectral_cluster <- function(S, k, seed) {
@@ -266,6 +281,7 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
                                k = 10, metric = "haversine", threshold = NULL,
                                crs = NULL, linkage = "average", pca_var = 0.95,
                                seed = 42, verbose = TRUE) {
+  restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
   c1 <- data[[coords[1]]]; c2 <- data[[coords[2]]]           # coord 1 (x/lon), coord 2 (y/lat)
 
   # -- Stage 1: AHC -> spatially coherent blocks --------------------------
@@ -351,6 +367,7 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
 #'
 #' @export
 make_stratified_folds <- function(data, response, k = 5, seed = 1, verbose = TRUE) {
+  restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
   y <- data[[response]]
   # Strata: exact label values for a few-valued response (binary / integer
   # label), else quantile bins so a continuous response stays balanced too.
