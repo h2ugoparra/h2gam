@@ -205,8 +205,10 @@ make_select_gen <- function(free_gen, fit) {
             call. = FALSE)
     return(free_gen)
   }
-  link <- fam$link
-  function() ctor(theta = th, link = link)
+  # do.call passes the link by value: the constructors read it with
+  # substitute(), and newer mgcv rejects a variable name there.
+  args <- list(theta = th, link = fam$link)
+  function() do.call(ctor, args)
 }
 
 # ---------------------------------------------------------------------------
