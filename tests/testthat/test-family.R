@@ -28,6 +28,43 @@ test_that("select_gam_covariates recovers true drivers and a count family", {
   expect_s3_class(res$model, "gam")
 })
 
+test_that("a user-supplied shape family still selects the real driver", {
+  # With theta left free in the search, adding the driver raised theta and the
+  # held-out deviance with it, so the driver was rejected.
+  skip_on_cran()
+  set.seed(11)
+  n  <- 300
+  df <- data.frame(lon = runif(n, -20, -5), lat = runif(n, 35, 50),
+                   sst = rnorm(n), noise = rnorm(n))
+  df$catch <- rnbinom(n, mu = exp(1 + 0.8 * sin(2 * df$sst)), size = 3)
+  for (fam in list(nb, nb(), tw)) {
+    res <- select_gam_covariates(df, "catch", c("sst", "noise"), structural = "te(lon, lat)",
+                                 family = fam, cv_k = 3, cv_scheme = "stratified",
+                                 outdir = tempdir(), logfile = NULL, verbose = FALSE)
+    expect_identical(res$kept, "sst")
+  }
+})
+
+test_that("make_select_gen fixes the shape and keeps the fitted link", {
+  set.seed(3)
+  x <- rnorm(200)
+  y <- rnbinom(200, mu = exp(1 + sin(x)), size = 2)
+  free <- function() nb(link = "sqrt")
+  gen  <- make_select_gen(free, gam(y ~ s(x), family = free()))
+  expect_identical(gen()$n.theta, 0)
+  expect_identical(gen()$link, "sqrt")
+
+  # nothing to fix: the generator passes through
+  pois <- function() poisson()
+  expect_identical(make_select_gen(pois, gam(y ~ s(x), family = pois())), pois)
+  expect_identical(make_select_gen(free, NULL), free)
+
+  # a shape that cannot be fixed warns and stays free
+  z <- gam(pmin(y, 3) + 1 ~ s(x), family = ocat(R = 4))
+  expect_warning(g <- make_select_gen(free, z), "cannot be held fixed")
+  expect_identical(g, free)
+})
+
 test_that("a user family object starts every fit from its supplied theta", {
   set.seed(3)
   x <- rnorm(200)

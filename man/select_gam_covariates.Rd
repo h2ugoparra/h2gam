@@ -149,8 +149,12 @@ Random-effect structural terms (\code{bs = "re"}) are excluded from held-out CV
 prediction, matching a deployment \code{predict(..., exclude = ...)}.
 
 Search fits use \code{mgcv::bam(discrete = TRUE)} with the family shape
-parameter (Tweedie p / negbin theta) fixed at its structural-only estimate
-for speed; the final fit is a free \code{mgcv::gam(method = "REML")}.
+parameter (negbin theta, Tweedie p, beta precision, scaled-t df and scale)
+fixed at its structural-only estimate, whether the family was auto-suggested
+or supplied. This keeps held-out deviance comparable between candidate
+models and is much faster. Other families with an estimated shape parameter
+(e.g. \code{ocat()}, \code{ziP()}) cannot be fixed this way and give a warning. The
+final fit is a free \code{mgcv::gam(method = "REML")}.
 }
 \examples{
 \donttest{
