@@ -1,3 +1,17 @@
+# h2gam (development version)
+
+## Bug fixes
+
+* A family supplied through `family` with an estimated shape parameter
+  (`nb`, `nb()`, `tw`, `betar`, `scat`) now has that parameter held fixed at
+  its structural-only estimate during the search, as auto-suggested `nb` and
+  `tw` already did; auto-suggested `betar` is now fixed too. Left free, the
+  shape was re-estimated on every CV fit, which made held-out deviance
+  incomparable between models: real drivers could be rejected (`nb`, `scat`)
+  or noise accepted (`tw`). Selections with these families may change. The
+  supplied link is kept. Families whose shape cannot be fixed (e.g. `ocat()`)
+  give a warning.
+
 # h2gam 0.3.0
 
 ## Breaking changes

@@ -184,18 +184,29 @@ family_object_gen <- function(family) {
   function() { family$putTheta(th0); family }
 }
 
-# Family generator with the shape parameter (Tweedie p / negbin theta) held
-# FIXED at its structural-only estimate. Re-estimating it on every CV fit is the
-# dominant cost of the search; fixing it gives a large speedup with negligible
-# effect on ranking. The final fit still uses the free (re-estimating) family.
-make_select_gen <- function(chosen, free_gen, fit) {
-  if (is.null(fit)) return(free_gen)
-  th <- tryCatch(fit$family$getTheta(TRUE), error = function(e) NA_real_)
-  if (identical(chosen, "tw") && is.finite(th))
-    return(function() Tweedie(p = th, link = power(0)))
-  if (identical(chosen, "nb") && is.finite(th))
-    return(function() negbin(theta = th, link = "log"))
-  free_gen
+# Family generator with the shape parameter (negbin theta / Tweedie p / beta
+# precision / scaled-t df+scale) held FIXED at its structural-only estimate
+# (`fit`). Two reasons: held-out deviance is only comparable between models
+# that share the shape value -- left free, a real driver raises nb theta and
+# with it the held-out deviance, so the search rejects it -- and re-estimating
+# it on every CV fit is the dominant cost of the search. The final fit still
+# uses the free (re-estimating) family. mgcv constructors take a positive
+# `theta` as known; the fitted link is carried over.
+make_select_gen <- function(free_gen, fit) {
+  fam <- fit$family
+  if (!inherits(fam, "extended.family") || !isTRUE(fam$n.theta > 0)) return(free_gen)
+  ctor <- list("Negative Binomial" = nb, "Tweedie" = tw, "Beta regression" = betar,
+               "Scaled t" = scat)[[sub("\\(.*", "", fam$family)]]
+  th <- tryCatch(fam$getTheta(TRUE), error = function(e) NA_real_)
+  if (is.null(ctor) || !all(is.finite(th)) || any(th <= 0)) {
+    warning(sprintf(paste0("family '%s': its shape parameter cannot be held fixed during the ",
+                           "search, so it is re-estimated on every CV fit and CV gains are ",
+                           "not strictly comparable between models."), fam$family),
+            call. = FALSE)
+    return(free_gen)
+  }
+  link <- fam$link
+  function() ctor(theta = th, link = link)
 }
 
 # ---------------------------------------------------------------------------
@@ -671,8 +682,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' prediction, matching a deployment `predict(..., exclude = ...)`.
 #'
 #' Search fits use `mgcv::bam(discrete = TRUE)` with the family shape
-#' parameter (Tweedie p / negbin theta) fixed at its structural-only estimate
-#' for speed; the final fit is a free `mgcv::gam(method = "REML")`.
+#' parameter (negbin theta, Tweedie p, beta precision, scaled-t df and scale)
+#' fixed at its structural-only estimate, whether the family was auto-suggested
+#' or supplied. This keeps held-out deviance comparable between candidate
+#' models and is much faster. Other families with an estimated shape parameter
+#' (e.g. `ocat()`, `ziP()`) cannot be fixed this way and give a warning. The
+#' final fit is a free `mgcv::gam(method = "REML")`.
 #'
 #' @param data A data.frame with the response, coordinates, candidate
 #'   covariates, and any variables used by `structural` / `offset`.
@@ -833,9 +848,16 @@ select_gam_covariates <- function(
     family_gen <- if (is.function(family)) function() family() else family_object_gen(family)
     squeeze <- FALSE; fs <- list(chosen = "user", table = NULL, fit = NULL,
                                  profile = profile_response(data[[response]]))
+    # A free shape parameter needs a structural-only fit to fix it for the search.
+    if (isTRUE(family_gen()$n.theta > 0)) {
+      off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
+      form0 <- stats::as.formula(paste(response, "~", paste(c(structural, off_term), collapse = " + ")))
+      fs$fit <- tryCatch(gam(form0, data = data, family = family_gen(), method = "REML",
+                             knots = knots), error = function(e) NULL)
+    }
   }
-  # fast fixed-shape family for the search; free family for the final fit
-  select_gen <- make_select_gen(fs$chosen, family_gen, fs$fit)
+  # fixed-shape family for the search; free family for the final fit
+  select_gen <- make_select_gen(family_gen, fs$fit)
 
   # -- univariate screen ---------------------------------------------------
   scr <- univariate_screen(data, candidates, na_max = na_max)
