@@ -44,7 +44,7 @@ Documentation is roxygen2 (markdown enabled): edit the `#'` blocks in `R/`, neve
 Non-obvious invariants to preserve when editing:
 
 - **Family generators are zero-arg closures, called fresh per fit** — `nb()`/`tw()` carry mutable theta/p state in their environment, so a shared family object leaks state across fits.
-- **Search fits vs final fit are deliberately different**: the search uses `bam(discrete = TRUE, method = "fREML")` with the family shape parameter *fixed* (`make_select_gen`) for speed; the final fit is a free `gam(method = "REML", select = TRUE)`.
+- **Search fits vs final fit are deliberately different**: the search uses `bam(discrete = TRUE, method = "fREML")` with the family shape parameter *fixed* at its structural-only estimate (`make_select_gen`, for auto-suggested and user-supplied families alike) — for speed, and because held-out deviance is only comparable between models sharing the shape value; the final fit is a free `gam(method = "REML", select = TRUE)`.
 - **Random-effect structural terms (`bs = 're'`) are excluded from held-out CV prediction** (via `predict(..., exclude = ...)` plus a factor-level remap), matching deployment behavior.
 - **The SV squeeze for betar is applied once, up front**, so the CV search and the final fit see the same (0,1) response.
 - **Structural terms are forced in and never screened** — candidates must improve CV skill over and above them.
