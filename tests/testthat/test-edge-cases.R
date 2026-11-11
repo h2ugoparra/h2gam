@@ -32,7 +32,26 @@ test_that("non-finite covariate values are dropped like NAs", {
   res <- select_gam_covariates(df, "catch", c("sst", "noise"), structural = "te(lon, lat)",
                                cv_k = 3, cv_scheme = "stratified", outdir = tempdir(),
                                logfile = NULL, verbose = FALSE)
-  expect_equal(nrow(res$model$model), n - 5)
+  expect_length(res$folds, n - 5)                  # dropped from the search
+  # and from the final fit only if the covariate carrying them is kept
+  expect_equal(nrow(res$model$model), if ("noise" %in% res$kept) n - 5 else n)
+})
+
+test_that("a sparse unselected candidate does not cost the final fit its rows", {
+  skip_on_cran()
+  set.seed(11)
+  n  <- 300
+  df <- data.frame(lon = runif(n, -20, -5), lat = runif(n, 35, 50),
+                   sst = rnorm(n), noise = rnorm(n))
+  df$catch <- rnbinom(n, mu = exp(1 + 0.8 * sin(2 * df$sst)), size = 3)
+  df$noise[1:80] <- NA
+  df$sst[81:90]  <- NA
+  res <- select_gam_covariates(df, "catch", c("sst", "noise"), structural = "te(lon, lat)",
+                               cv_k = 3, cv_scheme = "stratified", outdir = tempdir(),
+                               logfile = NULL, verbose = FALSE)
+  expect_identical(res$kept, "sst")
+  expect_length(res$folds, n - 90)                 # search: complete for both candidates
+  expect_equal(nrow(res$model$model), n - 10)      # final fit: complete for sst only
 })
 
 test_that("a final model with no smooth terms is handled", {

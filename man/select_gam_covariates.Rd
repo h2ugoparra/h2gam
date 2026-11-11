@@ -64,7 +64,10 @@ reported in the decision table (annotation only; the concurvity gate does
 the actual removal).}
 
 \item{na_max}{Drop candidates whose NA/non-finite fraction exceeds this in
-the univariate screen.}
+the univariate screen. The search runs on the rows complete for every
+candidate that passes, so each CV model sees the same data; a sparse
+candidate therefore costs the search rows even if it is not selected. The
+final model is refitted on all rows complete for the kept covariates.}
 
 \item{cv_k}{Number of CV folds.}
 
@@ -118,7 +121,7 @@ the final model summary.}
 covariate names), \code{family} (chosen family label), \code{decision} (per-candidate
 decision table, also written to \code{covariate_decision_table.csv}), \code{path}
 (forward-selection steps), \code{formula} (final formula as a string),
-\code{dev_expl} (deviance explained), \code{folds} (integer fold vector), and
+\code{dev_expl} (deviance explained), \code{folds} (integer fold vector, one per row used in the search), and
 \code{logfile} (path to the run log, or \code{NULL} if none was written).
 
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
