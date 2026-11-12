@@ -2,6 +2,12 @@
 
 ## Breaking changes
 
+* `make_spatial_folds()` now defaults to `linkage = "ward.D2"`, the default
+  `select_gam_covariates()` already passed, instead of `"average"`. Called
+  directly with `metric = "euclidean"` and no `linkage`, it returns different
+  folds than before; pass `linkage = "average"` to keep the old ones. The
+  default `"haversine"` metric is unaffected (Ward is downgraded to average
+  there), and so is `select_gam_covariates()`.
 * `outdir` now defaults to `tempdir()` instead of the working directory, so
   a call that does not set it no longer writes the decision table, PNGs and
   run log into wherever R happens to be running (CRAN policy). Those files

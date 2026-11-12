@@ -13,9 +13,10 @@
 #   3. runs a backward elimination re-check (BIC), a final select=TRUE
 #      shrinkage fit, and adequacy diagnostics.
 #
-# Every threshold is a logged, overridable argument; nothing is hardcoded to a
-# particular dataset. Structural (spatial/temporal) terms are forced in and not
-# screened -- covariates must earn their place OVER AND ABOVE them.
+# Every threshold is an overridable argument. The defaults for `structural`
+# and `coords` assume columns named month, year, lon and lat. Structural
+# (spatial/temporal) terms are forced in and not screened -- covariates must
+# earn their place OVER AND ABOVE them.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -296,10 +297,12 @@ make_select_gen <- function(free_gen, fit) {
 #'   proj string or EPSG code) used to reproject lon/lat to a planar system
 #'   before computing distances (needs the sf package). No projection is
 #'   assumed by default, so this function makes no study-area assumption.
-#' @param linkage AHC linkage method, passed to [stats::hclust()]. `"ward"`
-#'   is taken as `"ward.D2"` (the Ward criterion on unsquared distances,
-#'   matching scikit-learn). Ward variants are downgraded to `"average"` for
-#'   haversine, where they are invalid.
+#' @param linkage AHC linkage method, passed to [stats::hclust()]. The
+#'   default `"ward.D2"` is the Ward criterion on unsquared distances
+#'   (matching scikit-learn) and the same default as
+#'   [select_gam_covariates()]; `"ward"` is taken as `"ward.D2"`. Ward
+#'   variants are downgraded to `"average"` for haversine, where they are
+#'   invalid, so the default metric clusters with average linkage.
 #' @param pca_var Fraction of variance retained when the stage-2 covariate
 #'   view is compressed by PCA.
 #' @param seed Random seed for the k-means / spectral steps.
@@ -312,7 +315,7 @@ make_select_gen <- function(free_gen, fit) {
 #' @export
 make_spatial_folds <- function(data, response, candidates, coords = c("lon", "lat"),
                                k = 10, metric = "haversine", threshold = NULL,
-                               crs = NULL, linkage = "average", pca_var = 0.95,
+                               crs = NULL, linkage = "ward.D2", pca_var = 0.95,
                                seed = 42, verbose = TRUE) {
   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
   if (length(coords) != 2) stop("`coords` must name exactly two columns.")
@@ -729,9 +732,10 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' 3. runs a backward elimination re-check (BIC), a final `select = TRUE`
 #'    shrinkage fit, and adequacy diagnostics.
 #'
-#' Every threshold is a logged, overridable argument; nothing is hardcoded to
-#' a particular dataset. Structural (spatial/temporal) terms are forced in and
-#' not screened -- covariates must earn their place over and above them.
+#' Every threshold is an overridable argument. The defaults for `structural`
+#' and `coords` assume columns named `month`, `year`, `lon` and `lat`; set
+#' them to match your data. Structural (spatial/temporal) terms are forced in
+#' and not screened -- covariates must earn their place over and above them.
 #' Random-effect structural terms are excluded from held-out CV prediction,
 #' matching a deployment `predict(..., exclude = ...)`. That covers every
 #' `bs = "re"` form (random intercepts, random slopes such as
@@ -903,13 +907,22 @@ select_gam_covariates <- function(
   # terminating error are written to the log by calling handlers, each
   # distinct text once. on.exit restores the console even if the run errors.
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-  con <- file(file.path(outdir, logfile), "wt")
+  path <- file.path(outdir, logfile)
+  file.create(path)                        # start empty: `con` appends
+  con <- file(path, "at")
   sink(con, split = TRUE)
   on.exit({ sink(); close(con) }, add = TRUE)
   seen <- character()
   note <- function(prefix) function(cond) {
     txt <- paste0(prefix, trimws(conditionMessage(cond), "right"))
-    if (!txt %in% seen) { seen <<- c(seen, txt); writeLines(txt, con) }
+    if (txt %in% seen) return()
+    seen <<- c(seen, txt)
+    # Append to the file by path: writing to `con` itself would be echoed to
+    # the console by the split sink, on top of R's own report of the
+    # condition. `con` is in append mode, so its later writes land after this.
+    flush(con)
+    cat(txt, "
+", sep = "", file = path, append = TRUE)
   }
   invisible(withCallingHandlers(run(), warning = note("Warning: "),
                                 message = note(""), error = note("Error: ")))
