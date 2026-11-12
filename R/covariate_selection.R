@@ -575,6 +575,7 @@ forward_select <- function(data, response, candidates, structural, family_gen,
   path      <- list()
   step      <- 0
   low_folds <- character()                 # candidates scored on < half the folds
+  last      <- list()                      # each candidate's most recent CV score
 
   repeat {
     step <- step + 1
@@ -586,6 +587,7 @@ forward_select <- function(data, response, candidates, structural, family_gen,
            mean = mean(diff, na.rm = TRUE),
            se   = stats::sd(diff, na.rm = TRUE) / sqrt(sum(is.finite(diff))))
     })
+    for (s in scored) last[[s$v]] <- data.frame(var = s$v, cv_gain = s$mean, cv_se = s$se)
     ord <- order(vapply(scored, function(s) -s$mean, numeric(1)))
 
     picked <- NULL
@@ -620,7 +622,8 @@ forward_select <- function(data, response, candidates, structural, family_gen,
                     paste(low_folds, collapse = ", ")), call. = FALSE)
 
   list(accepted = accepted,
-       path = if (length(path)) do.call(rbind, path) else NULL)
+       path = if (length(path)) do.call(rbind, path) else NULL,
+       scores = if (length(last)) do.call(rbind, last) else NULL)
 }
 
 # ---------------------------------------------------------------------------
@@ -766,10 +769,22 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'
 #' @return (Invisibly) a list: `model` (the final mgcv gam), `kept` (selected
 #'   covariate names), `family` (chosen family label), `decision` (per-candidate
-#'   decision table, also written to `covariate_decision_table.csv`), `path`
+#'   decision table, also written to `covariate_decision_table.csv`; see
+#'   below), `path`
 #'   (forward-selection steps), `formula` (final formula as a string),
 #'   `dev_expl` (deviance explained), `folds` (integer fold vector, one per row used in the search), and
 #'   `logfile` (path to the run log, or `NULL` if none was written).
+#'
+#'   The `decision` table has one row per candidate. `cv_gain` and `cv_se`
+#'   are the mean paired per-fold drop in held-out deviance from adding the
+#'   candidate, and its standard error, at the step that decided its fate:
+#'   the step it was accepted or rejected for concurvity, otherwise the last
+#'   step it was scored. `reason` is one of `"selected"`; `"concurvity"`;
+#'   `"backward-BIC"`; `"no CV improvement"` (gain <= 0); `"CV gain below 1
+#'   SE"` (positive gain smaller than its standard error); `"CV scoring
+#'   failed"` (the fits or held-out predictions failed on too many folds); or
+#'   the univariate-screen reason (`"absent"`, `"non-numeric"`, `"NA <n>%"`,
+#'   `"zero variance"`), for which the CV columns are `NA`.
 #'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
 #'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`,
@@ -945,6 +960,8 @@ select_gam_covariates <- function(
     spearman_cluster= clusters[candidates],
     entry_step      = NA_integer_,
     concurvity      = NA_real_,
+    cv_gain         = NA_real_,
+    cv_se           = NA_real_,
     status          = NA_character_,
     reason          = NA_character_,
     final_edf       = NA_real_,
@@ -953,15 +970,23 @@ select_gam_covariates <- function(
   # screened-out
   decision$status[match(scr$dropped, decision$covariate)] <- "dropped"
   decision$reason[match(scr$dropped, decision$covariate)] <- scr$reason[scr$dropped]
+  # CV score behind each decision: the last time the candidate was scored,
+  # overridden below by the step at which it was accepted or concurvity-rejected
+  if (!is.null(fw$scores)) {
+    ms <- match(fw$scores$var, decision$covariate)
+    decision$cv_gain[ms] <- fw$scores$cv_gain; decision$cv_se[ms] <- fw$scores$cv_se
+  }
   # forward path
   if (!is.null(fw$path)) {
     acc <- fw$path[fw$path$action == "accept", ]
     rej <- fw$path[fw$path$action == "reject-concurvity", ]
     mi <- match(acc$var, decision$covariate)
     decision$entry_step[mi] <- acc$step; decision$concurvity[mi] <- acc$concurvity
+    decision$cv_gain[mi] <- acc$cv_gain; decision$cv_se[mi] <- acc$cv_se
     mr <- match(rej$var, decision$covariate)
     decision$status[mr] <- "dropped"; decision$reason[mr] <- "concurvity"
     decision$concurvity[mr] <- rej$concurvity
+    decision$cv_gain[mr] <- rej$cv_gain; decision$cv_se[mr] <- rej$cv_se
   }
   # backward drops vs final kept
   fwd_acc <- if (!is.null(fw$path)) fw$path$var[fw$path$action == "accept"] else character()
@@ -971,9 +996,14 @@ select_gam_covariates <- function(
   ki <- match(kept, decision$covariate)
   decision$status[ki] <- "kept"; decision$reason[ki] <- "selected"
   decision$final_edf[ki] <- edf[kept]
-  # anything still unlabelled = screened-in but never entered
-  decision$status[is.na(decision$status)] <- "dropped"
-  decision$reason[is.na(decision$reason)] <- "no CV improvement"
+  # anything still unlabelled = screened-in but never entered; say why, in the
+  # order the forward loop tests it
+  un <- is.na(decision$status)
+  g  <- decision$cv_gain[un]; se <- decision$cv_se[un]
+  decision$reason[un] <- ifelse(is.finite(g) & g <= 0, "no CV improvement",
+                         ifelse(is.finite(g) & is.finite(se), "CV gain below 1 SE",
+                                "CV scoring failed"))
+  decision$status[un] <- "dropped"
 
   utils::write.csv(decision, file.path(outdir, "covariate_decision_table.csv"), row.names = FALSE)
 

@@ -124,10 +124,20 @@ the final model summary.}
 \value{
 (Invisibly) a list: \code{model} (the final mgcv gam), \code{kept} (selected
 covariate names), \code{family} (chosen family label), \code{decision} (per-candidate
-decision table, also written to \code{covariate_decision_table.csv}), \code{path}
+decision table, also written to \code{covariate_decision_table.csv}; see
+below), \code{path}
 (forward-selection steps), \code{formula} (final formula as a string),
 \code{dev_expl} (deviance explained), \code{folds} (integer fold vector, one per row used in the search), and
 \code{logfile} (path to the run log, or \code{NULL} if none was written).
+
+The \code{decision} table has one row per candidate. \code{cv_gain} and \code{cv_se}
+are the mean paired per-fold drop in held-out deviance from adding the
+candidate, and its standard error, at the step that decided its fate:
+the step it was accepted or rejected for concurvity, otherwise the last
+step it was scored. \code{reason} is one of \code{"selected"}; \code{"concurvity"};
+\code{"backward-BIC"}; \code{"no CV improvement"} (gain <= 0); \code{"CV gain below 1 SE"} (positive gain smaller than its standard error); \code{"CV scoring failed"} (the fits or held-out predictions failed on too many folds); or
+the univariate-screen reason (\code{"absent"}, \code{"non-numeric"}, \code{"NA <n>\%"},
+\code{"zero variance"}), for which the CV columns are \code{NA}.
 
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
 \code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png},

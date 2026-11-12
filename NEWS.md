@@ -1,5 +1,15 @@
 # h2gam (development version)
 
+## New features
+
+* The decision table gains `cv_gain` and `cv_se` columns (placed after
+  `concurvity`): the cross-validated gain, and its standard error, behind
+  each candidate's decision. Candidates that never entered the model are no
+  longer all labelled `"no CV improvement"`: that reason now means a gain of
+  zero or less, `"CV gain below 1 SE"` marks a positive gain that failed the
+  one-standard-error rule, and `"CV scoring failed"` marks candidates whose
+  fits or held-out predictions failed.
+
 ## Bug fixes
 
 * A family supplied through `family` with an estimated shape parameter
