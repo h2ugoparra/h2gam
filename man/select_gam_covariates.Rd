@@ -38,7 +38,8 @@ covariates, and any variables used by \code{structural} / \code{offset}.}
 the model as a \verb{s(<name>)} smooth.}
 
 \item{structural}{Character vector of mgcv terms forced into every model
-and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}.}
+and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}. May be
+\code{character()} for an intercept-only baseline.}
 
 \item{coords}{Length-2 character vector naming the longitude and latitude
 columns, used for spatial folds and complete-case filtering.}
