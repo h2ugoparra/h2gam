@@ -542,9 +542,16 @@ concurvity_new <- function(model, newvar, accepted) {
   max(W[rlab, clab, drop = FALSE])
 }
 
+# A random-effect smooth or smooth spec: bs = 're', bs = 'fs', or a tensor
+# with such a margin.
+is_re_smooth <- function(s) {
+  is.list(s) &&
+    (inherits(s, c("random.effect", "fs.interaction", "re.smooth.spec", "fs.smooth.spec")) ||
+       any(vapply(s$margin, is_re_smooth, logical(1))))
+}
+
 forward_select <- function(data, response, candidates, structural, family_gen,
                            folds, knots, concurvity_max = 0.8, offset = NULL,
-                           re_vars = character(), re_labels = character(),
                            verbose = TRUE) {
   off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
   fold_ids <- sort(unique(folds))
@@ -564,11 +571,18 @@ forward_select <- function(data, response, candidates, structural, family_gen,
       if (is.null(m)) next
       # Random-effect terms (e.g. s(year, bs='re')) are excluded from held-out
       # prediction -- their level-specific deviation is unknowable out of fold
-      # (matches the deployment predict(..., exclude=...)). Remap the factor to a
-      # training level so the design matrix builds; the excluded term zeroes it.
-      for (v in re_vars) te[[v]] <- factor(as.character(tr[[v]][1]), levels = levels(tr[[v]]))
+      # (matches the deployment predict(..., exclude=...)). They are read off
+      # the fit, so every form is covered (random slopes, by=, bs='fs', tensor
+      # margins). Levels unseen in training are remapped to a training level so
+      # the design matrix builds; the excluded term zeroes it.
+      re <- Filter(is_re_smooth, m$smooth)
+      for (v in unique(unlist(lapply(re, `[[`, "term")))) if (is.factor(tr[[v]])) {
+        unseen <- !te[[v]] %in% tr[[v]]
+        te[[v]][unseen] <- tr[[v]][1]
+      }
       mu <- tryCatch(predict(m, newdata = te, type = "response",
-                             exclude = re_labels), error = function(e) NULL)
+                             exclude = vapply(re, `[[`, "", "label")),
+                     error = function(e) NULL)
       if (is.null(mu) || length(mu) != nrow(te)) next
       dr <- tryCatch(sum(m$family$dev.resids(te[[response]], mu, rep(1, nrow(te)))) / nrow(te),
                      error = function(e) NA_real_)
@@ -700,8 +714,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' Every threshold is a logged, overridable argument; nothing is hardcoded to
 #' a particular dataset. Structural (spatial/temporal) terms are forced in and
 #' not screened -- covariates must earn their place over and above them.
-#' Random-effect structural terms (`bs = "re"`) are excluded from held-out CV
-#' prediction, matching a deployment `predict(..., exclude = ...)`.
+#' Random-effect structural terms are excluded from held-out CV prediction,
+#' matching a deployment `predict(..., exclude = ...)`. That covers every
+#' `bs = "re"` form (random intercepts, random slopes such as
+#' `s(vessel, sst, bs = "re")`, `by =` variables), factor-smooth interactions
+#' (`bs = "fs"`), and tensor terms with an `"re"` margin. Each needs a factor
+#' grouping variable.
 #'
 #' Search fits use `mgcv::bam(discrete = TRUE)` with the family shape
 #' parameter (negbin theta, Tweedie p, beta precision, scaled-t df and scale)
@@ -870,19 +888,23 @@ select_gam_covariates <- function(
       stop(sprintf("offset column '%s' must be > 0 (it enters as log(%s)).", offset, offset))
   }
 
-  # random-effect structural terms -> excluded from held-out CV prediction
-  re_terms  <- structural[grepl("bs\\s*=\\s*['\"]re['\"]", structural)]
-  re_vars   <- sub("^\\s*s\\(\\s*([A-Za-z0-9_.]+).*", "\\1", re_terms)
-  re_labels <- if (length(re_vars)) paste0("s(", re_vars, ")") else character()
-  # The held-out level remap in forward_select() needs a factor; on a numeric
-  # variable s(x, bs='re') is a penalised slope, not random intercepts, and the
-  # remap would turn every held-out prediction into NA.
-  for (v in re_vars) if (!v %in% names(data))
-    stop(sprintf("random-effect term s(%s, bs='re'): column '%s' not found in data.", v, v))
-  for (v in re_vars) if (!is.factor(data[[v]]))
-    stop(sprintf(paste0("random-effect term s(%s, bs='re') needs '%s' to be a factor ",
-                        "(numeric gives a penalised slope, not random intercepts); ",
-                        "convert it first, e.g. data$%s <- factor(data$%s)."), v, v, v, v))
+  # Random-effect structural terms are excluded from held-out CV prediction
+  # (see forward_select). They need a grouping factor: on numeric variables
+  # alone, s(x, bs='re') is a penalised slope, not random intercepts.
+  for (term in structural) {
+    spec <- tryCatch(eval(parse(text = term)[[1]], asNamespace("mgcv")),
+                     error = function(e) NULL)
+    if (!is_re_smooth(spec)) next
+    v <- spec$term
+    if (!all(v %in% names(data)))
+      stop(sprintf("random-effect term %s: column '%s' not found in data.",
+                   term, setdiff(v, names(data))[1]))
+    if (!any(vapply(data[v], is.factor, logical(1))))
+      stop(sprintf(paste0("random-effect term %s needs %s to be a factor ",
+                          "(numeric gives a penalised slope, not random intercepts); ",
+                          "convert it first, e.g. data$%s <- factor(data$%s)."),
+                   term, paste0("'", v, "'", collapse = " or "), v[1], v[1]))
+  }
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
   # Optional run log: tee all console output to outdir/logfile. All progress
@@ -964,7 +986,7 @@ select_gam_covariates <- function(
   if (verbose) cat("\n== Forward selection (CV-scored, concurvity-gated) ==\n")
   fw <- forward_select(data, search_resp, scr$keep, structural, select_gen,
                        folds, knots, concurvity_max = concurvity_max,
-                       offset = offset, re_vars = re_vars, re_labels = re_labels,
+                       offset = offset,
                        verbose = verbose)
 
   # -- backward re-check ---------------------------------------------------

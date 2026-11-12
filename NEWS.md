@@ -28,6 +28,15 @@
 
 ## Bug fixes
 
+* Random-effect structural terms are now recognised in every form, not only
+  `s(var, bs='re')`: random slopes (`s(vessel, sst, bs='re')`), `by =`
+  variables, factor-smooth interactions (`bs='fs'`) and tensor terms with an
+  `'re'` margin are all excluded from held-out CV prediction. Previously
+  these stayed in the prediction (or were excluded under the wrong label),
+  and a random slope written with the numeric variable first was rejected as
+  "needs to be a factor". Selections with such terms may change. Only
+  held-out levels unseen in training are remapped now, so a grouping factor
+  that also appears in another term keeps its real levels there.
 * A family supplied through `family` with an estimated shape parameter
   (`nb`, `nb()`, `tw`, `betar`, `scat`) now has that parameter held fixed at
   its structural-only estimate during the search, as auto-suggested `nb` and
