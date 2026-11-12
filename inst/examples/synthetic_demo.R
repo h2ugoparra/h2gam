@@ -29,7 +29,7 @@ df$chl_dup <- df$chl + rnorm(n, sd = 0.05)   # ~collinear with chl
 
 # A smooth spatial field plus nonlinear effects of the true drivers. The
 # response is an overdispersed non-negative count, so family="auto" should land
-# on a count family (Poisson / negative binomial / Tweedie).
+# on a count family (Poisson / negative binomial).
 spatial <- 0.6 * sin(df$lon / 4) + 0.6 * cos(df$lat / 4)
 eta     <- 1.0 + spatial + 0.8 * sin(df$sst) - 0.5 * df$chl^2
 df$catch <- rnbinom(n, mu = exp(eta), size = 2)

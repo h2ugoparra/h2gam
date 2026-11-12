@@ -44,7 +44,12 @@ and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}.}
 columns, used for spatial folds and complete-case filtering.}
 
 \item{family}{\code{"auto"} (default) profiles the response and takes the
-lowest-AIC candidate that fits on the structural-only model. The reported
+lowest-AIC candidate that fits on the structural-only model. Candidates
+are limited to families whose AIC is comparable on the response: Poisson
+and negative binomial for counts, squeezed beta alone for proportions
+with exact 0/1. Tweedie is not auto-suggested for either (its density
+cannot be ranked against count probabilities or a squeezed response);
+pass \code{family = tw} to use it. The reported
 \code{dispersion} and \code{resid_ks_p} columns are diagnostics to inspect, not
 inputs to the choice. Both are measured before covariate selection, so a
 low \code{resid_ks_p} reflects not-yet-modelled covariates and structure as much

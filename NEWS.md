@@ -17,6 +17,15 @@
   values (up to `na_max`) silently removed those rows from the final model
   even when it was not selected. The search is unchanged; the number of rows
   it uses, and the final fit's when different, are now logged.
+* `family = "auto"` no longer offers Tweedie for count responses or for
+  proportions with exact 0/1. Its likelihood is a density, which cannot be
+  ranked by AIC against Poisson / negative binomial probabilities or against
+  a squeezed-beta fit; on low counts it beat the true Poisson or negative
+  binomial family by hundreds of AIC units. Counts now rank Poisson against
+  negative binomial only, and boundary proportions use squeezed beta. Auto
+  runs that chose `tw` on counts will now choose `nb` or `poisson`; pass
+  `family = tw` to keep Tweedie. Tweedie is still ranked for strictly
+  positive continuous responses.
 
 # h2gam 0.3.0
 

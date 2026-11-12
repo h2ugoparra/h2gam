@@ -44,9 +44,11 @@ profile_response <- function(y) {
   )
 }
 
-# Ordered list of candidate family generators for the profiled response.
-# Each element is a zero-arg closure returning a FRESH mgcv family (fresh
-# matters: nb()/tw() carry a mutable theta/p estimate in their environment).
+# Candidate family generators for the profiled response. Each element is a
+# zero-arg closure returning a FRESH mgcv family (fresh matters: nb()/tw()
+# carry a mutable theta/p estimate in their environment). Candidates within a
+# branch are ranked by AIC, so they must share a likelihood type on the same
+# response: all probabilities, or all densities.
 family_candidates <- function(p) {
   cand <- list()
   add <- function(name, gen) cand[[name]] <<- gen
@@ -66,15 +68,12 @@ family_candidates <- function(p) {
 
   } else if (p$integer && p$nonneg) {
     # ---- count branch ----
-    if (!is.na(p$dispersion) && p$dispersion > 1.5) {
-      add("nb",      function() nb())        # overdispersed -> negative binomial
-      add("tw",      function() tw())        # Tweedie handles zero-mass + tail
-      add("poisson", function() poisson())
-    } else {
-      add("poisson", function() poisson())
-      add("nb",      function() nb())
-    }
-    if (p$frac_zero > 0.5) add("tw", function() tw())
+    # Tweedie is deliberately not a candidate: its likelihood is a density,
+    # Poisson/nb give probabilities, and on low counts the density at integer
+    # values is arbitrarily large -- it "wins" on AIC by hundreds of units on
+    # truly Poisson/nb data. Pass family = tw explicitly to use it.
+    add("poisson", function() poisson())
+    add("nb",      function() nb())
 
   } else if (p$in01 && p$frac_zero == 0 && p$frac_one == 0) {
     # ---- proportion, open interval ----
@@ -83,8 +82,10 @@ family_candidates <- function(p) {
 
   } else if (p$in01) {
     # ---- proportion with 0/1 boundary (caller applies SV squeeze for betar) ----
+    # The only candidate: the squeezed-beta AIC is set by the squeeze constant
+    # (the density is unbounded at the boundary), so it cannot be ranked
+    # against a model of the raw response such as Tweedie.
     add("betar_sv", function() betar())
-    add("tw",       function() tw())
 
   } else if (p$positive) {
     # ---- strictly positive continuous ----
@@ -701,7 +702,12 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' @param coords Length-2 character vector naming the longitude and latitude
 #'   columns, used for spatial folds and complete-case filtering.
 #' @param family `"auto"` (default) profiles the response and takes the
-#'   lowest-AIC candidate that fits on the structural-only model. The reported
+#'   lowest-AIC candidate that fits on the structural-only model. Candidates
+#'   are limited to families whose AIC is comparable on the response: Poisson
+#'   and negative binomial for counts, squeezed beta alone for proportions
+#'   with exact 0/1. Tweedie is not auto-suggested for either (its density
+#'   cannot be ranked against count probabilities or a squeezed response);
+#'   pass `family = tw` to use it. The reported
 #'   `dispersion` and `resid_ks_p` columns are diagnostics to inspect, not
 #'   inputs to the choice. Both are measured before covariate selection, so a
 #'   low `resid_ks_p` reflects not-yet-modelled covariates and structure as much
