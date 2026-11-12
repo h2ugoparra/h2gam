@@ -42,8 +42,17 @@ jobs:
             echo "::error::Branch '$branch' must start with feature/, fix/, docs/, chore/, perf/, or refactor/."; exit 1
           fi
   quality:
-    name: quality
-    runs-on: ubuntu-latest
+    # The Linux job keeps the plain name "quality": branch protection on dev
+    # and main requires a check with exactly that name.
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, name: quality}
+          - {os: windows-latest, name: quality (windows)}
+          - {os: macos-latest, name: quality (macos)}
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
