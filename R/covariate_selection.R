@@ -13,9 +13,10 @@
 #   3. runs a backward elimination re-check (BIC), a final select=TRUE
 #      shrinkage fit, and adequacy diagnostics.
 #
-# Every threshold is a logged, overridable argument; nothing is hardcoded to a
-# particular dataset. Structural (spatial/temporal) terms are forced in and not
-# screened -- covariates must earn their place OVER AND ABOVE them.
+# Every threshold is an overridable argument. The defaults for `structural`
+# and `coords` assume columns named month, year, lon and lat. Structural
+# (spatial/temporal) terms are forced in and not screened -- covariates must
+# earn their place OVER AND ABOVE them.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -718,9 +719,10 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' 3. runs a backward elimination re-check (BIC), a final `select = TRUE`
 #'    shrinkage fit, and adequacy diagnostics.
 #'
-#' Every threshold is a logged, overridable argument; nothing is hardcoded to
-#' a particular dataset. Structural (spatial/temporal) terms are forced in and
-#' not screened -- covariates must earn their place over and above them.
+#' Every threshold is an overridable argument. The defaults for `structural`
+#' and `coords` assume columns named `month`, `year`, `lon` and `lat`; set
+#' them to match your data. Structural (spatial/temporal) terms are forced in
+#' and not screened -- covariates must earn their place over and above them.
 #' Random-effect structural terms are excluded from held-out CV prediction,
 #' matching a deployment `predict(..., exclude = ...)`. That covers every
 #' `bs = "re"` form (random intercepts, random slopes such as
