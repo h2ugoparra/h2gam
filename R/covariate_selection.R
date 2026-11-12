@@ -8,16 +8,14 @@
 #      positive / gaussian branches), ranked by AIC alone; dispersion and
 #      residual uniformity are reported for inspection, not scored;
 #   2. forward-selects a DECORRELATED, prediction-relevant covariate subset,
-#      scored by spatial-block CV skill, with a concurvity gate and a 1-SE
-#      stopping rule;
+#      scored by cross-validated skill (spatial-block or stratified folds),
+#      with a concurvity gate and a 1-SE stopping rule;
 #   3. runs a backward elimination re-check (BIC), a final select=TRUE
 #      shrinkage fit, and adequacy diagnostics.
 #
 # Every threshold is a logged, overridable argument; nothing is hardcoded to a
 # particular dataset. Structural (spatial/temporal) terms are forced in and not
 # screened -- covariates must earn their place OVER AND ABOVE them.
-#
-# Design decisions and rationale: see the approved plan.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -27,9 +25,6 @@
 profile_response <- function(y) {
   y <- y[is.finite(y)]
   list(
-    n          = length(y),
-    min        = min(y),
-    max        = max(y),
     integer    = all(abs(y - round(y)) < 1e-8),
     binary     = all(y %in% c(0, 1)),
     nonneg     = all(y >= 0),
@@ -37,9 +32,6 @@ profile_response <- function(y) {
     in01       = all(y >= 0 & y <= 1),
     frac_zero  = mean(y == 0),
     frac_one   = mean(y == 1),
-    mean       = mean(y),
-    var        = stats::var(y),
-    dispersion = if (mean(y) > 0) stats::var(y) / mean(y) else NA_real_,
     skew       = mean((y - mean(y))^3) / stats::sd(y)^3
   )
 }
@@ -169,7 +161,7 @@ suggest_family <- function(data, response, structural, knots, offset = NULL) {
   }
   rownames(tab) <- NULL
 
-  list(profile = p, table = tab, chosen = chosen,
+  list(table = tab, chosen = chosen,
        family_gen = cands[[chosen]], squeeze = identical(chosen, "betar_sv"),
        fit = fits[[chosen]])
 }
@@ -945,8 +937,7 @@ select_gam_covariates <- function(
       cat(sprintf("-> chosen: %s%s\n", fs$chosen, if (squeeze) " (SV squeeze)" else "")) }
   } else {
     family_gen <- if (is.function(family)) function() family() else family_object_gen(family)
-    squeeze <- FALSE; fs <- list(chosen = "user", table = NULL, fit = NULL,
-                                 profile = profile_response(data[[response]]))
+    squeeze <- FALSE; fs <- list(chosen = "user", table = NULL, fit = NULL)
     # A free shape parameter needs a structural-only fit to fix it for the search.
     if (isTRUE(family_gen()$n.theta > 0)) {
       off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
