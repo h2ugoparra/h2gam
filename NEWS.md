@@ -54,6 +54,11 @@
 
 ## Bug fixes
 
+* Forward selection now warns when the reference model (structural terms
+  plus the covariates accepted so far) could not be scored on every CV fold.
+  Such a fold is lost to every candidate compared against that model, so
+  gains and standard errors silently rested on fewer folds than `cv_k`;
+  only a baseline scorable on fewer than 2 folds was reported.
 * The concurvity gate now fails closed. A candidate whose concurvity could
   not be computed (its full-data fit or `concurvity()` failed) used to be
   accepted, and logged with concurvity 0.00 in the second case. It is now

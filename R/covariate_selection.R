@@ -598,6 +598,10 @@ forward_select <- function(data, response, candidates, structural, family_gen,
                         "only %d of %d CV folds (fit/prediction failed or non-finite ",
                         "deviance); check for NA/invalid values in the model variables."),
                  sum(is.finite(cur_dev)), length(cur_dev)))
+  # A fold the reference model (structural terms + accepted covariates) could
+  # not be scored on is lost to every candidate compared against it, because
+  # the gain is paired per fold. Track the worst case to report it.
+  ref_folds <- sum(is.finite(cur_dev))
   path      <- list()
   step      <- 0
   low_folds <- character()                 # candidates scored on < half the folds
@@ -648,12 +652,19 @@ forward_select <- function(data, response, candidates, structural, family_gen,
     accepted  <- c(accepted, picked$v)
     remaining <- setdiff(remaining, picked$v)
     cur_dev   <- picked$cd
+    ref_folds <- min(ref_folds, sum(is.finite(cur_dev)))
     if (length(remaining) == 0) break
   }
 
   if (length(low_folds))
     warning(sprintf("forward selection: %s could be scored on fewer than half the CV folds (fit/prediction failures); their CV gain is unreliable.",
                     paste(low_folds, collapse = ", ")), call. = FALSE)
+
+  if (ref_folds < length(fold_ids))
+    warning(sprintf(paste0("forward selection: the reference model could be scored on only %d ",
+                           "of %d CV folds at some step (fit/prediction failures), so the CV ",
+                           "gains compared against it rest on fewer folds than `cv_k`."),
+                    ref_folds, length(fold_ids)), call. = FALSE)
 
   if (length(ungated))
     warning(sprintf(paste0("forward selection: concurvity could not be computed for %s (the ",
