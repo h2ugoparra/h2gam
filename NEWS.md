@@ -36,6 +36,11 @@
 
 ## Bug fixes
 
+* The concurvity gate now fails closed. A candidate whose concurvity could
+  not be computed (its full-data fit or `concurvity()` failed) used to be
+  accepted, and logged with concurvity 0.00 in the second case. It is now
+  rejected with a warning naming it, and its decision-table reason is
+  `"concurvity check failed"`.
 * Random-effect structural terms are now recognised in every form, not only
   `s(var, bs='re')`: random slopes (`s(vessel, sst, bs='re')`), `by =`
   variables, factor-smooth interactions (`bs='fs'`) and tensor terms with an
