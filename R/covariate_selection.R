@@ -805,9 +805,11 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   directory, which R deletes when the session ends: pass a path to keep
 #'   the files.
 #' @param logfile Filename (within `outdir`) for a run log that captures all
-#'   the console output; `NULL` disables it. Only written when `verbose = TRUE`
-#'   (there is nothing to capture otherwise). The sink is unwound on exit, so an
-#'   error mid-run still restores the console.
+#'   the console output, plus warnings, messages and the error that stopped a
+#'   failed run (each distinct text once, where it first occurred); `NULL`
+#'   disables it. Only written when `verbose = TRUE` (there is nothing to
+#'   capture otherwise). The sink is unwound on exit, so an error mid-run
+#'   still restores the console.
 #' @param seed Random seed for fold construction.
 #' @param verbose Print progress, the family table, the selection path, and
 #'   the final model summary.
@@ -878,6 +880,35 @@ select_gam_covariates <- function(
     seed           = 1,
     verbose        = TRUE) {
 
+  run <- function() select_covariates_impl(
+    data, response, candidates, structural, coords, family, concurvity_max,
+    spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
+    cv_linkage, knots, offset, outdir, logfile, seed, verbose)
+  # All progress output is verbose-gated: nothing to log unless verbose.
+  if (is.null(logfile) || !isTRUE(verbose)) return(invisible(run()))
+
+  # Run log: tee console output to outdir/logfile (split = TRUE keeps the
+  # console echo). sink() only sees stdout, so warnings, messages and a
+  # terminating error are written to the log by calling handlers, each
+  # distinct text once. on.exit restores the console even if the run errors.
+  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+  con <- file(file.path(outdir, logfile), "wt")
+  sink(con, split = TRUE)
+  on.exit({ sink(); close(con) }, add = TRUE)
+  seen <- character()
+  note <- function(prefix) function(cond) {
+    txt <- paste0(prefix, trimws(conditionMessage(cond), "right"))
+    if (!txt %in% seen) { seen <<- c(seen, txt); writeLines(txt, con) }
+  }
+  invisible(withCallingHandlers(run(), warning = note("Warning: "),
+                                message = note(""), error = note("Error: ")))
+}
+
+select_covariates_impl <- function(
+    data, response, candidates, structural, coords, family, concurvity_max,
+    spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
+    cv_linkage, knots, offset, outdir, logfile, seed, verbose) {
+
   if (!is.data.frame(data)) stop("`data` must be a data.frame.")
   .need_cols(data, response, "response")
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
@@ -919,15 +950,7 @@ select_gam_covariates <- function(
   }
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
-  # Optional run log: tee all console output to outdir/logfile. All progress
-  # output is verbose-gated, so there is nothing to capture unless verbose.
-  # on.exit guarantees the sink is popped even if the run errors, so a failure
-  # never leaves the console redirected; split = TRUE keeps the console echo.
-  do_log <- !is.null(logfile) && isTRUE(verbose)
-  if (do_log) {
-    sink(file.path(outdir, logfile), split = TRUE)
-    on.exit(sink(), add = TRUE)
-  }
+  do_log <- !is.null(logfile) && isTRUE(verbose)   # the caller holds the sink
 
   # -- family --------------------------------------------------------------
   if (identical(family, "auto")) {

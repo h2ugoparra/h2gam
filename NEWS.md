@@ -17,6 +17,10 @@
   zero or less, `"CV gain below 1 SE"` marks a positive gain that failed the
   one-standard-error rule, and `"CV scoring failed"` marks candidates whose
   fits or held-out predictions failed.
+* The run log now also records warnings, messages and the error that stopped
+  a failed run. It used to capture printed output only, so a log could look
+  clean while the console showed warnings. Each distinct text is written
+  once, where it first occurred.
 * `structural = character()` is now accepted and gives an intercept-only
   baseline; it used to fail with a formula parse error.
 
