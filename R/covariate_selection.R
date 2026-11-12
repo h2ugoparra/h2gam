@@ -530,15 +530,16 @@ fit_search <- function(form, data, family_gen, knots) {
 
 # Concurvity of a newly added smooth against the already-accepted covariate
 # smooths only (structural terms deliberately excluded). Returns the worst
-# pairwise value, 0 when nothing to compare against.
+# pairwise value, 0 when nothing to compare against, and NA when it cannot be
+# computed -- the caller must not read that as "no concurvity".
 concurvity_new <- function(model, newvar, accepted) {
   if (length(accepted) == 0) return(0)
   cc <- tryCatch(concurvity(model, full = FALSE), error = function(e) NULL)
-  if (is.null(cc)) return(0)
+  if (is.null(cc)) return(NA_real_)
   W    <- cc$worst
-  rlab <- intersect(paste0("s(", newvar, ")"), rownames(W))
-  clab <- intersect(paste0("s(", accepted, ")"), colnames(W))
-  if (length(rlab) == 0 || length(clab) == 0) return(0)
+  rlab <- paste0("s(", newvar, ")")
+  clab <- paste0("s(", accepted, ")")
+  if (!rlab %in% rownames(W) || !all(clab %in% colnames(W))) return(NA_real_)
   max(W[rlab, clab, drop = FALSE])
 }
 
@@ -606,6 +607,7 @@ forward_select <- function(data, response, candidates, structural, family_gen,
   step      <- 0
   low_folds <- character()                 # candidates scored on < half the folds
   last      <- list()                      # each candidate's most recent CV score
+  ungated   <- character()                 # candidates whose concurvity check failed
 
   repeat {
     step <- step + 1
@@ -627,7 +629,10 @@ forward_select <- function(data, response, candidates, structural, family_gen,
       if (!is.finite(s$se) || s$mean < s$se) next      # NA se (<2 scored folds) or fails 1-SE bar
       m  <- fit_full(c(accepted, s$v))
       cg <- if (is.null(m)) NA_real_ else concurvity_new(m, s$v, accepted)
-      if (is.finite(cg) && cg > concurvity_max) {
+      # The gate fails closed: a candidate whose concurvity cannot be computed
+      # (full-data fit or concurvity() failed) is rejected, not waved through.
+      if (!is.finite(cg)) ungated <- union(ungated, s$v)
+      if (!is.finite(cg) || cg > concurvity_max) {
         path[[length(path) + 1]] <- data.frame(step = step, var = s$v, action = "reject-concurvity",
                                                 concurvity = cg, cv_gain = s$mean, cv_se = s$se)
         next
@@ -650,6 +655,12 @@ forward_select <- function(data, response, candidates, structural, family_gen,
   if (length(low_folds))
     warning(sprintf("forward selection: %s could be scored on fewer than half the CV folds (fit/prediction failures); their CV gain is unreliable.",
                     paste(low_folds, collapse = ", ")), call. = FALSE)
+
+  if (length(ungated))
+    warning(sprintf(paste0("forward selection: concurvity could not be computed for %s (the ",
+                           "full-data fit or concurvity() failed); rejected, since the ",
+                           "concurvity gate could not be applied."),
+                    paste(ungated, collapse = ", ")), call. = FALSE)
 
   list(accepted = accepted,
        path = if (length(path)) do.call(rbind, path) else NULL,
@@ -757,7 +768,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the constructor instead to leave your object untouched.
 #' @param concurvity_max Reject a candidate whose worst pairwise concurvity
 #'   against the already-accepted covariate smooths exceeds this (structural
-#'   terms excluded from the gate).
+#'   terms excluded from the gate). A candidate whose concurvity cannot be
+#'   computed is rejected with a warning.
 #' @param spearman_pre `|Spearman rho|` threshold for the correlation clusters
 #'   reported in the decision table (annotation only; the concurvity gate does
 #'   the actual removal).
@@ -817,6 +829,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   candidate, and its standard error, at the step that decided its fate:
 #'   the step it was accepted or rejected for concurvity, otherwise the last
 #'   step it was scored. `reason` is one of `"selected"`; `"concurvity"`;
+#'   `"concurvity check failed"` (concurvity could not be computed, so the
+#'   candidate was rejected; a warning names it);
 #'   `"backward-BIC"`; `"no CV improvement"` (gain <= 0); `"CV gain below 1
 #'   SE"` (positive gain smaller than its standard error); `"CV scoring
 #'   failed"` (the fits or held-out predictions failed on too many folds); or
@@ -1039,7 +1053,8 @@ select_gam_covariates <- function(
     decision$entry_step[mi] <- acc$step; decision$concurvity[mi] <- acc$concurvity
     decision$cv_gain[mi] <- acc$cv_gain; decision$cv_se[mi] <- acc$cv_se
     mr <- match(rej$var, decision$covariate)
-    decision$status[mr] <- "dropped"; decision$reason[mr] <- "concurvity"
+    decision$status[mr] <- "dropped"
+    decision$reason[mr] <- ifelse(is.na(rej$concurvity), "concurvity check failed", "concurvity")
     decision$concurvity[mr] <- rej$concurvity
     decision$cv_gain[mr] <- rej$cv_gain; decision$cv_se[mr] <- rej$cv_se
   }

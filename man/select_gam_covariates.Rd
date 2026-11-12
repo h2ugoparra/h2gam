@@ -63,7 +63,8 @@ the constructor instead to leave your object untouched.}
 
 \item{concurvity_max}{Reject a candidate whose worst pairwise concurvity
 against the already-accepted covariate smooths exceeds this (structural
-terms excluded from the gate).}
+terms excluded from the gate). A candidate whose concurvity cannot be
+computed is rejected with a warning.}
 
 \item{spearman_pre}{\verb{|Spearman rho|} threshold for the correlation clusters
 reported in the decision table (annotation only; the concurvity gate does
@@ -138,6 +139,8 @@ are the mean paired per-fold drop in held-out deviance from adding the
 candidate, and its standard error, at the step that decided its fate:
 the step it was accepted or rejected for concurvity, otherwise the last
 step it was scored. \code{reason} is one of \code{"selected"}; \code{"concurvity"};
+\code{"concurvity check failed"} (concurvity could not be computed, so the
+candidate was rejected; a warning names it);
 \code{"backward-BIC"}; \code{"no CV improvement"} (gain <= 0); \code{"CV gain below 1 SE"} (positive gain smaller than its standard error); \code{"CV scoring failed"} (the fits or held-out predictions failed on too many folds); or
 the univariate-screen reason (\code{"absent"}, \code{"non-numeric"}, \code{"NA <n>\%"},
 \code{"zero variance"}), for which the CV columns are \code{NA}.

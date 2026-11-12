@@ -122,6 +122,30 @@ test_that("a candidate whose fits fail is reported as a scoring failure", {
   expect_false(is.finite(fw$scores$cv_gain))
 })
 
+test_that("the concurvity gate fails closed when concurvity cannot be computed", {
+  set.seed(5)
+  n  <- 240
+  df <- data.frame(lon = runif(n, -20, -5), lat = runif(n, 35, 50),
+                   a = rnorm(n), b = rnorm(n))
+  df$y <- sin(2 * df$a) + 0.6 * sin(2 * df$b) + rnorm(n, sd = 0.3)
+  fs <- function() forward_select(df, "y", c("a", "b"), "te(lon, lat, k=4)",
+                                  family_gen = function() gaussian(),
+                                  folds = rep_len(1:3, n), knots = NULL, verbose = FALSE)
+  expect_setequal(fs()$accepted, c("a", "b"))        # both real drivers pass normally
+
+  local_mocked_bindings(concurvity = function(...) stop("boom"))
+  m <- gam(y ~ s(a) + s(b), data = df)
+  expect_identical(concurvity_new(m, "b", character()), 0)   # nothing to compare against
+  expect_true(is.na(concurvity_new(m, "b", "a")))
+
+  # the second driver can no longer be gated: rejected and reported, not accepted
+  expect_warning(fw <- fs(), "concurvity could not be computed for b")
+  expect_identical(fw$accepted, "a")
+  rej <- fw$path[fw$path$action == "reject-concurvity", ]
+  expect_identical(unique(rej$var), "b")
+  expect_true(all(is.na(rej$concurvity)))
+})
+
 test_that("forward selection fails loudly when the baseline cannot be scored", {
   df <- sim_counts(n = 60)
   folds <- rep_len(1:3, nrow(df))
