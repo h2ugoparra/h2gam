@@ -11,6 +11,12 @@
   or noise accepted (`tw`). Selections with these families may change. The
   supplied link is kept. Families whose shape cannot be fixed (e.g. `ocat()`)
   give a warning.
+* The final model is now fitted on every row complete for the kept
+  covariates. It used to reuse the search data, which is restricted to rows
+  complete for every screened-in candidate, so a candidate with missing
+  values (up to `na_max`) silently removed those rows from the final model
+  even when it was not selected. The search is unchanged; the number of rows
+  it uses, and the final fit's when different, are now logged.
 
 # h2gam 0.3.0
 

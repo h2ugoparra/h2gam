@@ -718,7 +718,10 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   reported in the decision table (annotation only; the concurvity gate does
 #'   the actual removal).
 #' @param na_max Drop candidates whose NA/non-finite fraction exceeds this in
-#'   the univariate screen.
+#'   the univariate screen. The search runs on the rows complete for every
+#'   candidate that passes, so each CV model sees the same data; a sparse
+#'   candidate therefore costs the search rows even if it is not selected. The
+#'   final model is refitted on all rows complete for the kept covariates.
 #' @param cv_k Number of CV folds.
 #' @param cv_scheme Fold construction: `"spatial"` (SPCV, the default; see
 #'   [make_spatial_folds()]) or `"stratified"` (non-spatial k-fold stratified
@@ -759,7 +762,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   covariate names), `family` (chosen family label), `decision` (per-candidate
 #'   decision table, also written to `covariate_decision_table.csv`), `path`
 #'   (forward-selection steps), `formula` (final formula as a string),
-#'   `dev_expl` (deviance explained), `folds` (integer fold vector), and
+#'   `dev_expl` (deviance explained), `folds` (integer fold vector, one per row used in the search), and
 #'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
@@ -874,12 +877,20 @@ select_gam_covariates <- function(
   # complete-case on the comparison columns so every CV model sees the same rows.
   # The offset is included: an NA offset gives NA held-out predictions, which
   # would silently void every CV fold.
-  need <- c(response, coords, scr$keep, offset,
-            all.vars(stats::as.formula(paste("~", paste(structural, collapse = "+")))))
-  need <- intersect(need, names(data))
-  finite_ok <- vapply(data[need], function(x) !is.numeric(x) | is.finite(x),
-                      logical(nrow(data)))                   # complete.cases keeps Inf
-  data <- data[stats::complete.cases(data[, need]) & rowSums(!finite_ok) == 0, ]
+  # The supplied data is kept: the final fit only needs the kept covariates, so
+  # it gets back the rows that a sparse, unselected candidate cost the search.
+  usable <- function(vars) {
+    vars <- intersect(vars, names(full_data))
+    finite_ok <- vapply(full_data[vars], function(x) !is.numeric(x) | is.finite(x),
+                        logical(nrow(full_data)))            # complete.cases keeps Inf
+    stats::complete.cases(full_data[, vars]) & rowSums(!finite_ok) == 0
+  }
+  full_data  <- data
+  model_vars <- c(response, offset,
+                  all.vars(stats::as.formula(paste("~", paste(structural, collapse = "+")))))
+  data <- full_data[usable(c(model_vars, coords, scr$keep)), ]
+  if (verbose) cat(sprintf("  search rows: %d of %d (complete for every screened-in candidate)\n",
+                           nrow(data), nrow(full_data)))
 
   # SV squeeze applied HERE so the search sees the same (0,1) response as the
   # final fit -- raw 0/1 values give non-finite beta deviance in the CV scoring.
@@ -910,7 +921,11 @@ select_gam_covariates <- function(
                            knots, offset = offset, verbose = verbose)
 
   # -- final fit + adequacy ------------------------------------------------
-  model <- final_fit(data, response, kept, structural, family_gen, knots,
+  final_data <- full_data[usable(c(model_vars, kept)), ]
+  if (verbose && nrow(final_data) != nrow(data))
+    cat(sprintf("\n== Final fit ==\n  %d rows (complete for the kept covariates; the search used %d)\n",
+                nrow(final_data), nrow(data)))
+  model <- final_fit(final_data, response, kept, structural, family_gen, knots,
                      offset = offset, squeeze = squeeze)
 
   # -- decision table ------------------------------------------------------
@@ -968,7 +983,7 @@ select_gam_covariates <- function(
   # all.terms = TRUE hands parametric terms to termplot(), which evaluates
   # model$call$data (the symbol `data`) in the formula's environment -- the
   # global env, where `data` is utils::data. Give a plot-only copy the frame.
-  pmodel <- model; pmodel$call$data <- data
+  pmodel <- model; pmodel$call$data <- final_data
   tryCatch(plot(pmodel, pages = 1, scale = 0, all.terms = TRUE, shade = TRUE),
            finally = grDevices::dev.off())
 
