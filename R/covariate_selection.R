@@ -296,10 +296,12 @@ make_select_gen <- function(free_gen, fit) {
 #'   proj string or EPSG code) used to reproject lon/lat to a planar system
 #'   before computing distances (needs the sf package). No projection is
 #'   assumed by default, so this function makes no study-area assumption.
-#' @param linkage AHC linkage method, passed to [stats::hclust()]. `"ward"`
-#'   is taken as `"ward.D2"` (the Ward criterion on unsquared distances,
-#'   matching scikit-learn). Ward variants are downgraded to `"average"` for
-#'   haversine, where they are invalid.
+#' @param linkage AHC linkage method, passed to [stats::hclust()]. The
+#'   default `"ward.D2"` is the Ward criterion on unsquared distances
+#'   (matching scikit-learn) and the same default as
+#'   [select_gam_covariates()]; `"ward"` is taken as `"ward.D2"`. Ward
+#'   variants are downgraded to `"average"` for haversine, where they are
+#'   invalid, so the default metric clusters with average linkage.
 #' @param pca_var Fraction of variance retained when the stage-2 covariate
 #'   view is compressed by PCA.
 #' @param seed Random seed for the k-means / spectral steps.
@@ -312,7 +314,7 @@ make_select_gen <- function(free_gen, fit) {
 #' @export
 make_spatial_folds <- function(data, response, candidates, coords = c("lon", "lat"),
                                k = 10, metric = "haversine", threshold = NULL,
-                               crs = NULL, linkage = "average", pca_var = 0.95,
+                               crs = NULL, linkage = "ward.D2", pca_var = 0.95,
                                seed = 42, verbose = TRUE) {
   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
   if (length(coords) != 2) stop("`coords` must name exactly two columns.")

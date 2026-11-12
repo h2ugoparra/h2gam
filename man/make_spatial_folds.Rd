@@ -13,7 +13,7 @@ make_spatial_folds(
   metric = "haversine",
   threshold = NULL,
   crs = NULL,
-  linkage = "average",
+  linkage = "ward.D2",
   pca_var = 0.95,
   seed = 42,
   verbose = TRUE
@@ -50,10 +50,12 @@ proj string or EPSG code) used to reproject lon/lat to a planar system
 before computing distances (needs the sf package). No projection is
 assumed by default, so this function makes no study-area assumption.}
 
-\item{linkage}{AHC linkage method, passed to \code{\link[stats:hclust]{stats::hclust()}}. \code{"ward"}
-is taken as \code{"ward.D2"} (the Ward criterion on unsquared distances,
-matching scikit-learn). Ward variants are downgraded to \code{"average"} for
-haversine, where they are invalid.}
+\item{linkage}{AHC linkage method, passed to \code{\link[stats:hclust]{stats::hclust()}}. The
+default \code{"ward.D2"} is the Ward criterion on unsquared distances
+(matching scikit-learn) and the same default as
+\code{\link[=select_gam_covariates]{select_gam_covariates()}}; \code{"ward"} is taken as \code{"ward.D2"}. Ward
+variants are downgraded to \code{"average"} for haversine, where they are
+invalid, so the default metric clusters with average linkage.}
 
 \item{pca_var}{Fraction of variance retained when the stage-2 covariate
 view is compressed by PCA.}
