@@ -146,6 +146,28 @@ test_that("the concurvity gate fails closed when concurvity cannot be computed",
   expect_true(all(is.na(rej$concurvity)))
 })
 
+test_that("a concurvity-rejected candidate is not scored again", {
+  set.seed(6)
+  n  <- 240
+  df <- data.frame(lon = runif(n, -20, -5), lat = runif(n, 35, 50),
+                   a = rnorm(n), b = rnorm(n), c = rnorm(n))
+  df$y <- 1.5 * sin(2 * df$a) + sin(2 * df$b) + 0.6 * sin(2 * df$c) + rnorm(n, sd = 0.3)
+  # report b as concurve with a, everything else as independent
+  local_mocked_bindings(concurvity = function(model, ...) {
+    labs <- vapply(model$smooth, `[[`, "", "label")
+    W <- matrix(0, length(labs), length(labs), dimnames = list(labs, labs))
+    if (all(c("s(a)", "s(b)") %in% labs)) W["s(b)", "s(a)"] <- 1
+    list(worst = W)
+  })
+  fw <- forward_select(df, "y", c("a", "b", "c"), "te(lon, lat, k=4)",
+                       family_gen = function() gaussian(),
+                       folds = rep_len(1:3, n), knots = NULL, verbose = FALSE)
+  expect_identical(fw$accepted, c("a", "c"))
+  # rejected at step 2, before c is accepted; not revisited at step 3
+  expect_identical(fw$path$action[fw$path$var == "b"], "reject-concurvity")
+  expect_identical(max(fw$path$step), 2)
+})
+
 test_that("forward selection fails loudly when the baseline cannot be scored", {
   df <- sim_counts(n = 60)
   folds <- rep_len(1:3, nrow(df))

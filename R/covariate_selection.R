@@ -635,6 +635,10 @@ forward_select <- function(data, response, candidates, structural, family_gen,
       if (!is.finite(cg) || cg > concurvity_max) {
         path[[length(path) + 1]] <- data.frame(step = step, var = s$v, action = "reject-concurvity",
                                                 concurvity = cg, cv_gain = s$mean, cv_se = s$se)
+        # Out for good: worst-case concurvity depends only on the two smooths'
+        # bases, so against a growing accepted set it can only rise. Leaving
+        # it in would re-fit it on every fold at every later step.
+        remaining <- setdiff(remaining, s$v)
         next
       }
       picked <- s; picked$concurvity <- cg; break
