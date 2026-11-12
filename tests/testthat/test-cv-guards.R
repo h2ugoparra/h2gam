@@ -53,6 +53,46 @@ test_that("decision-table na_frac reflects the data as supplied", {
   expect_equal(res$decision$na_frac[res$decision$covariate == "sst"], 30 / nrow(df))
 })
 
+test_that("the decision table carries the CV score and reason behind each decision", {
+  skip_on_cran()
+  df <- sim_counts()
+  df$const <- 1
+  res <- select_gam_covariates(df, "catch", c("sst", "noise", "const"), cv_k = 3,
+                               structural = "te(lon, lat)", cv_scheme = "stratified",
+                               outdir = tempdir(), logfile = NULL, verbose = FALSE)
+  d <- res$decision
+  row <- function(v) d[d$covariate == v, ]
+
+  # kept: the score at its entry step
+  acc <- res$path[res$path$var == "sst" & res$path$action == "accept", ]
+  expect_equal(row("sst")$cv_gain, acc$cv_gain)
+  expect_equal(row("sst")$cv_se, acc$cv_se)
+  expect_gt(row("sst")$cv_gain, row("sst")$cv_se)
+
+  # dropped in the search: scored, and the reason agrees with the score
+  n <- row("noise")
+  expect_true(is.finite(n$cv_gain) && is.finite(n$cv_se))
+  expect_identical(n$reason, if (n$cv_gain <= 0) "no CV improvement" else "CV gain below 1 SE")
+  if (n$cv_gain > 0) expect_lt(n$cv_gain, n$cv_se)
+
+  # screened out before the search: no score
+  expect_identical(row("const")$reason, "zero variance")
+  expect_true(is.na(row("const")$cv_gain))
+})
+
+test_that("a candidate whose fits fail is reported as a scoring failure", {
+  df <- sim_counts(n = 120)
+  folds <- rep_len(1:3, nrow(df))
+  # s(bad) cannot be fitted (non-numeric), so every fold is NA for it
+  df$bad <- sample(letters, nrow(df), TRUE)
+  fw <- suppressWarnings(
+    forward_select(df, "catch", "bad", "te(lon, lat)", family_gen = function() poisson(),
+                   folds = folds, knots = NULL, verbose = FALSE))
+  expect_length(fw$accepted, 0)
+  expect_identical(fw$scores$var, "bad")
+  expect_false(is.finite(fw$scores$cv_gain))
+})
+
 test_that("forward selection fails loudly when the baseline cannot be scored", {
   df <- sim_counts(n = 60)
   folds <- rep_len(1:3, nrow(df))
