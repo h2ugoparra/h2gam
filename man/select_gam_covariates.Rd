@@ -22,7 +22,7 @@ select_gam_covariates(
   cv_linkage = "ward.D2",
   knots = NULL,
   offset = NULL,
-  outdir = ".",
+  outdir = tempdir(),
   logfile = "covariate_selection_log.txt",
   seed = 1,
   verbose = TRUE
@@ -110,7 +110,9 @@ mgcv place knots automatically; entries for absent variables are ignored.}
 every fit (including family suggestion, so AIC stays comparable).}
 
 \item{outdir}{Directory for the decision-table CSV, diagnostic PNGs, and the
-run log (created if absent).}
+run log (created if absent). Defaults to the session's temporary
+directory, which R deletes when the session ends: pass a path to keep
+the files.}
 
 \item{logfile}{Filename (within \code{outdir}) for a run log that captures all
 the console output; \code{NULL} disables it. Only written when \code{verbose = TRUE}
