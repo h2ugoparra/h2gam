@@ -116,9 +116,11 @@ directory, which R deletes when the session ends: pass a path to keep
 the files.}
 
 \item{logfile}{Filename (within \code{outdir}) for a run log that captures all
-the console output; \code{NULL} disables it. Only written when \code{verbose = TRUE}
-(there is nothing to capture otherwise). The sink is unwound on exit, so an
-error mid-run still restores the console.}
+the console output, plus warnings, messages and the error that stopped a
+failed run (each distinct text once, where it first occurred); \code{NULL}
+disables it. Only written when \code{verbose = TRUE} (there is nothing to
+capture otherwise). The sink is unwound on exit, so an error mid-run
+still restores the console.}
 
 \item{seed}{Random seed for fold construction.}
 
