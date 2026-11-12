@@ -13,9 +13,10 @@
 #   3. runs a backward elimination re-check (BIC), a final select=TRUE
 #      shrinkage fit, and adequacy diagnostics.
 #
-# Every threshold is a logged, overridable argument; nothing is hardcoded to a
-# particular dataset. Structural (spatial/temporal) terms are forced in and not
-# screened -- covariates must earn their place OVER AND ABOVE them.
+# Every threshold is an overridable argument. The defaults for `structural`
+# and `coords` assume columns named month, year, lon and lat. Structural
+# (spatial/temporal) terms are forced in and not screened -- covariates must
+# earn their place OVER AND ABOVE them.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -720,9 +721,10 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' 3. runs a backward elimination re-check (BIC), a final `select = TRUE`
 #'    shrinkage fit, and adequacy diagnostics.
 #'
-#' Every threshold is a logged, overridable argument; nothing is hardcoded to
-#' a particular dataset. Structural (spatial/temporal) terms are forced in and
-#' not screened -- covariates must earn their place over and above them.
+#' Every threshold is an overridable argument. The defaults for `structural`
+#' and `coords` assume columns named `month`, `year`, `lon` and `lat`; set
+#' them to match your data. Structural (spatial/temporal) terms are forced in
+#' and not screened -- covariates must earn their place over and above them.
 #' Random-effect structural terms are excluded from held-out CV prediction,
 #' matching a deployment `predict(..., exclude = ...)`. That covers every
 #' `bs = "re"` form (random intercepts, random slopes such as
@@ -894,13 +896,22 @@ select_gam_covariates <- function(
   # terminating error are written to the log by calling handlers, each
   # distinct text once. on.exit restores the console even if the run errors.
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-  con <- file(file.path(outdir, logfile), "wt")
+  path <- file.path(outdir, logfile)
+  file.create(path)                        # start empty: `con` appends
+  con <- file(path, "at")
   sink(con, split = TRUE)
   on.exit({ sink(); close(con) }, add = TRUE)
   seen <- character()
   note <- function(prefix) function(cond) {
     txt <- paste0(prefix, trimws(conditionMessage(cond), "right"))
-    if (!txt %in% seen) { seen <<- c(seen, txt); writeLines(txt, con) }
+    if (txt %in% seen) return()
+    seen <<- c(seen, txt)
+    # Append to the file by path: writing to `con` itself would be echoed to
+    # the console by the split sink, on top of R's own report of the
+    # condition. `con` is in append mode, so its later writes land after this.
+    flush(con)
+    cat(txt, "
+", sep = "", file = path, append = TRUE)
   }
   invisible(withCallingHandlers(run(), warning = note("Warning: "),
                                 message = note(""), error = note("Error: ")))
