@@ -2,6 +2,8 @@ name: CI
 on:
   pull_request:
     branches: [dev, main]
+permissions:
+  contents: read
 jobs:
   commit-lint:
     name: commit-lint
@@ -30,8 +32,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate branch name
+        # The branch name is attacker-controlled on a PR. Pass it through the
+        # environment: a ${{ }} expression is pasted into the script text
+        # before the shell runs, so a name containing a quote would execute.
+        env:
+          branch: ${{ github.head_ref }}
         run: |
-          branch='${{ github.head_ref }}'
           if ! printf '%s' "$branch" | grep -Eq '^(feature|fix|docs|chore|perf|refactor)/.+'; then
             echo "::error::Branch '$branch' must start with feature/, fix/, docs/, chore/, perf/, or refactor/."; exit 1
           fi
