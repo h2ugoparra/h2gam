@@ -31,6 +31,10 @@ test_that("select_gam_covariates writes a run log, and logfile=NULL disables it"
   expect_identical(sink.number(), 0L)
 })
 
+test_that("outdir defaults to the temporary directory, not the working directory", {
+  expect_identical(eval(formals(select_gam_covariates)$outdir), tempdir())
+})
+
 test_that("verbose = FALSE prints nothing", {
   skip_on_cran()
   set.seed(8)

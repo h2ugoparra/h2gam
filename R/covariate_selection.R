@@ -793,7 +793,9 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' @param offset Name of an effort column; adds `offset(log(<offset>))` to
 #'   every fit (including family suggestion, so AIC stays comparable).
 #' @param outdir Directory for the decision-table CSV, diagnostic PNGs, and the
-#'   run log (created if absent).
+#'   run log (created if absent). Defaults to the session's temporary
+#'   directory, which R deletes when the session ends: pass a path to keep
+#'   the files.
 #' @param logfile Filename (within `outdir`) for a run log that captures all
 #'   the console output; `NULL` disables it. Only written when `verbose = TRUE`
 #'   (there is nothing to capture otherwise). The sink is unwound on exit, so an
@@ -861,7 +863,7 @@ select_gam_covariates <- function(
     cv_linkage     = "ward.D2",
     knots          = NULL,
     offset         = NULL,
-    outdir         = ".",
+    outdir         = tempdir(),
     logfile        = "covariate_selection_log.txt",
     seed           = 1,
     verbose        = TRUE) {

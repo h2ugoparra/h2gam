@@ -50,7 +50,7 @@ Optional (feature-gated via `Suggests`): `DHARMa` (residual diagnostics in famil
 
 ## Outputs
 
-Written to `outdir`:
+Written to `outdir` (by default the session's temporary directory, so set it to keep them):
 
 - `covariate_decision_table.csv` — per-candidate accept/reject decisions with scores
 - `selection_diagnostics.png` — adequacy diagnostics of the final model

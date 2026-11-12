@@ -1,5 +1,13 @@
 # h2gam (development version)
 
+## Breaking changes
+
+* `outdir` now defaults to `tempdir()` instead of the working directory, so
+  a call that does not set it no longer writes the decision table, PNGs and
+  run log into wherever R happens to be running (CRAN policy). Those files
+  are deleted when the session ends: pass `outdir` to keep them. Calls that
+  already set `outdir` are unaffected.
+
 ## New features
 
 * The decision table gains `cv_gain` and `cv_se` columns (placed after
