@@ -168,6 +168,22 @@ test_that("a concurvity-rejected candidate is not scored again", {
   expect_identical(max(fw$path$step), 2)
 })
 
+test_that("a CV fold lost to the reference model is reported", {
+  df <- sim_counts(n = 120)
+  folds <- rep(1:3, c(30, 40, 50))          # training sizes 90, 80, 70
+  real_fit <- fit_search
+  # every fit that holds out fold 2 fails
+  local_mocked_bindings(fit_search = function(form, data, ...) {
+    if (nrow(data) == 80) NULL else real_fit(form, data, ...)
+  })
+  expect_warning(
+    fw <- forward_select(df, "catch", "sst", "te(lon, lat, k=4)",
+                         family_gen = function() poisson(), folds = folds,
+                         knots = NULL, verbose = FALSE),
+    "only 2 of 3 CV folds")
+  expect_true(is.finite(fw$scores$cv_gain))
+})
+
 test_that("forward selection fails loudly when the baseline cannot be scored", {
   df <- sim_counts(n = 60)
   folds <- rep_len(1:3, nrow(df))
