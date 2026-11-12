@@ -26,8 +26,7 @@ test_that("select_gam_covariates writes a run log, and logfile=NULL disables it"
   expect_identical(log[1], "== h2gam run ==")
   expect_match(log[2], paste("h2gam", utils::packageVersion("h2gam")), fixed = TRUE)
   expect_match(log[2], paste("mgcv", utils::packageVersion("mgcv")), fixed = TRUE)
-  head <- paste(log[1:10], collapse = "
-")
+  head <- paste(log[1:10], collapse = "\n")
   expect_match(head, "candidates (1): sst", fixed = TRUE)
   expect_match(head, "concurvity_max = 0.8 | spearman_pre = 0.7 | na_max = 0.3", fixed = TRUE)
   expect_match(head, "cv_k = 3 | cv_scheme = spatial | seed = 1", fixed = TRUE)

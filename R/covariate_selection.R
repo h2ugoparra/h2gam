@@ -941,29 +941,20 @@ select_covariates_impl <- function(
     fam  <- if (identical(family, "auto")) "auto" else
       tryCatch(paste("user-supplied:", (if (is.function(family)) family() else family)$family),
                error = function(e) "user-supplied")
-    cat("== h2gam run ==
-")
-    cat(sprintf("  h2gam %s | mgcv %s | %s | %s
-", utils::packageVersion("h2gam"),
+    cat("== h2gam run ==\n")
+    cat(sprintf("  h2gam %s | mgcv %s | %s | %s\n", utils::packageVersion("h2gam"),
                 utils::packageVersion("mgcv"), R.version.string,
                 format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")))
-    cat(sprintf("  response: %s | offset: %s | family: %s
-", show(response), show(offset), fam))
-    cat(sprintf("  candidates (%d): %s
-", length(candidates), show(candidates)))
-    cat(sprintf("  structural: %s
-", show(structural)))
-    cat(sprintf("  knots: %s
-", if (is.null(knots)) "NULL" else
+    cat(sprintf("  response: %s | offset: %s | family: %s\n", show(response), show(offset), fam))
+    cat(sprintf("  candidates (%d): %s\n", length(candidates), show(candidates)))
+    cat(sprintf("  structural: %s\n", show(structural)))
+    cat(sprintf("  knots: %s\n", if (is.null(knots)) "NULL" else
       paste(sprintf("%s = c(%s)", names(knots), vapply(knots, show, "")), collapse = "; ")))
-    cat(sprintf("  concurvity_max = %s | spearman_pre = %s | na_max = %s
-",
+    cat(sprintf("  concurvity_max = %s | spearman_pre = %s | na_max = %s\n",
                 show(concurvity_max), show(spearman_pre), show(na_max)))
-    cat(sprintf("  cv_k = %s | cv_scheme = %s | seed = %s
-", show(cv_k), show(cv_scheme[1]), show(seed)))
+    cat(sprintf("  cv_k = %s | cv_scheme = %s | seed = %s\n", show(cv_k), show(cv_scheme[1]), show(seed)))
     if (identical(cv_scheme[1], "spatial"))
-      cat(sprintf("  coords = %s | cv_metric = %s | cv_linkage = %s | cv_threshold = %s | cv_crs = %s
-",
+      cat(sprintf("  coords = %s | cv_metric = %s | cv_linkage = %s | cv_threshold = %s | cv_crs = %s\n",
                   show(coords), show(cv_metric), show(cv_linkage), show(cv_threshold), show(cv_crs)))
   }
 
