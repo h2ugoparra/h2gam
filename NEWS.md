@@ -16,6 +16,10 @@
 
 ## New features
 
+* Verbose output, and so the run log, now opens with a header giving the
+  h2gam, mgcv and R versions, the time, and every setting of the run
+  (response, candidates, structural terms, family, thresholds, CV setup). A
+  log now shows which code and thresholds produced it.
 * The decision table gains `cv_gain` and `cv_se` columns (placed after
   `concurvity`): the cross-validated gain, and its standard error, behind
   each candidate's decision. Candidates that never entered the model are no

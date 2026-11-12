@@ -21,6 +21,18 @@ test_that("select_gam_covariates writes a run log, and logfile=NULL disables it"
   expect_gt(file.info(logpath)$size, 0)          # not empty
   expect_identical(res$logfile, logpath)
 
+  # the log opens with the versions and the settings of the run
+  log <- readLines(logpath)
+  expect_identical(log[1], "== h2gam run ==")
+  expect_match(log[2], paste("h2gam", utils::packageVersion("h2gam")), fixed = TRUE)
+  expect_match(log[2], paste("mgcv", utils::packageVersion("mgcv")), fixed = TRUE)
+  head <- paste(log[1:10], collapse = "
+")
+  expect_match(head, "candidates (1): sst", fixed = TRUE)
+  expect_match(head, "concurvity_max = 0.8 | spearman_pre = 0.7 | na_max = 0.3", fixed = TRUE)
+  expect_match(head, "cv_k = 3 | cv_scheme = spatial | seed = 1", fixed = TRUE)
+  expect_match(head, "cv_metric = haversine", fixed = TRUE)
+
   # logfile = NULL: nothing written, NULL returned
   d2   <- file.path(tempdir(), "log_off")
   res2 <- fit(d2, logfile = NULL)
@@ -49,9 +61,11 @@ test_that("the run log records warnings and the error that stopped a run", {
   d1 <- file.path(tempdir(), "log_warn")
   expect_warning(res <- fit(d1, candidates = c("sst", "sst")), "duplicate candidates")
   log <- readLines(res$logfile)
-  expect_identical(log[1], "Warning: duplicate candidates dropped: sst.")   # where it occurred
-  # the log-only line is not echoed to the console; the rest is identical
-  expect_identical(log[-1], console)
+  i <- grep("^Warning: duplicate candidates dropped: sst", log)
+  expect_length(i, 1)
+  # the log-only line is not echoed to the console; the rest is identical,
+  # so the line sits where the warning occurred
+  expect_identical(log[-i], console)
 
   # an error still stops the run, is in the log, and the console is restored
   d2 <- file.path(tempdir(), "log_error")

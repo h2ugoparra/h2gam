@@ -820,7 +820,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   directory, which R deletes when the session ends: pass a path to keep
 #'   the files.
 #' @param logfile Filename (within `outdir`) for a run log that captures all
-#'   the console output, plus warnings, messages and the error that stopped a
+#'   the console output (which opens with a header giving the h2gam, mgcv and
+#'   R versions and every setting of the run), plus warnings, messages and the error that stopped a
 #'   failed run (each distinct text once, where it first occurred); `NULL`
 #'   disables it. Only written when `verbose = TRUE` (there is nothing to
 #'   capture otherwise). The sink is unwound on exit, so an error mid-run
@@ -932,6 +933,39 @@ select_covariates_impl <- function(
     data, response, candidates, structural, coords, family, concurvity_max,
     spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
     cv_linkage, knots, offset, outdir, logfile, seed, verbose) {
+
+  # Run header, before anything can fail: the versions and every setting, so
+  # a log shows which code and thresholds produced it.
+  if (verbose) {
+    show <- function(x) if (is.null(x)) "NULL" else paste(as.character(x), collapse = ", ")
+    fam  <- if (identical(family, "auto")) "auto" else
+      tryCatch(paste("user-supplied:", (if (is.function(family)) family() else family)$family),
+               error = function(e) "user-supplied")
+    cat("== h2gam run ==
+")
+    cat(sprintf("  h2gam %s | mgcv %s | %s | %s
+", utils::packageVersion("h2gam"),
+                utils::packageVersion("mgcv"), R.version.string,
+                format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")))
+    cat(sprintf("  response: %s | offset: %s | family: %s
+", show(response), show(offset), fam))
+    cat(sprintf("  candidates (%d): %s
+", length(candidates), show(candidates)))
+    cat(sprintf("  structural: %s
+", show(structural)))
+    cat(sprintf("  knots: %s
+", if (is.null(knots)) "NULL" else
+      paste(sprintf("%s = c(%s)", names(knots), vapply(knots, show, "")), collapse = "; ")))
+    cat(sprintf("  concurvity_max = %s | spearman_pre = %s | na_max = %s
+",
+                show(concurvity_max), show(spearman_pre), show(na_max)))
+    cat(sprintf("  cv_k = %s | cv_scheme = %s | seed = %s
+", show(cv_k), show(cv_scheme[1]), show(seed)))
+    if (identical(cv_scheme[1], "spatial"))
+      cat(sprintf("  coords = %s | cv_metric = %s | cv_linkage = %s | cv_threshold = %s | cv_crs = %s
+",
+                  show(coords), show(cv_metric), show(cv_linkage), show(cv_threshold), show(cv_crs)))
+  }
 
   if (!is.data.frame(data)) stop("`data` must be a data.frame.")
   .need_cols(data, response, "response")
