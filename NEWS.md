@@ -34,6 +34,14 @@
 * A failure in the partial-effects plot no longer discards the finished
   selection; the message is written into `partial_effects.png` instead.
 
+## Performance
+
+* A candidate rejected by the concurvity gate is no longer re-scored at every
+  later step of the forward search (one model fit per CV fold each time). Its
+  worst-case concurvity against a growing set of accepted smooths cannot
+  fall, so the outcome was always the same rejection. Selections are
+  unchanged; the selection path lists each such candidate once.
+
 ## Bug fixes
 
 * The concurvity gate now fails closed. A candidate whose concurvity could
