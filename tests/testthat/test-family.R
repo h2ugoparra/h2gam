@@ -24,8 +24,30 @@ test_that("select_gam_covariates recovers true drivers and a count family", {
 
   expect_true("sst" %in% res$kept)          # real driver kept
   expect_false("noise1" %in% res$kept)      # pure noise dropped
-  expect_match(res$family, "nb|poisson|tw") # non-negative count family
+  expect_match(res$family, "nb|poisson")    # non-negative count family
   expect_s3_class(res$model, "gam")
+})
+
+test_that("auto candidates only include families with comparable AIC", {
+  cands <- function(y) names(family_candidates(profile_response(y)))
+  set.seed(9)
+  # zero-heavy, overdispersed counts: no Tweedie (density vs probabilities)
+  expect_setequal(cands(rnbinom(300, mu = 0.5, size = 0.5)), c("poisson", "nb"))
+  expect_setequal(cands(rpois(300, 5)), c("poisson", "nb"))
+  # proportions with exact 0/1: squeezed beta only
+  expect_identical(cands(c(0, 1, runif(100))), "betar_sv")
+  # strictly positive continuous: all densities on the same response
+  expect_setequal(cands(rgamma(300, shape = 0.5)), c("Gamma_log", "tw"))
+})
+
+test_that("auto does not pick Tweedie on low Poisson counts", {
+  # Tweedie's density at integer values used to beat the Poisson/nb
+  # probabilities by hundreds of AIC units here.
+  set.seed(1)
+  x  <- rnorm(400)
+  df <- data.frame(x = x, y = rpois(400, 0.5 * exp(0.5 * sin(2 * x))))
+  fs <- suggest_family(df, "y", "s(x)", knots = NULL)
+  expect_match(fs$chosen, "poisson|nb")
 })
 
 test_that("a user-supplied shape family still selects the real driver", {
