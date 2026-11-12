@@ -165,9 +165,10 @@ shrinkage fit, and adequacy diagnostics.
 }
 }
 \details{
-Every threshold is a logged, overridable argument; nothing is hardcoded to
-a particular dataset. Structural (spatial/temporal) terms are forced in and
-not screened -- covariates must earn their place over and above them.
+Every threshold is an overridable argument. The defaults for \code{structural}
+and \code{coords} assume columns named \code{month}, \code{year}, \code{lon} and \code{lat}; set
+them to match your data. Structural (spatial/temporal) terms are forced in
+and not screened -- covariates must earn their place over and above them.
 Random-effect structural terms are excluded from held-out CV prediction,
 matching a deployment \code{predict(..., exclude = ...)}. That covers every
 \code{bs = "re"} form (random intercepts, random slopes such as
