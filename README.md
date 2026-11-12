@@ -4,7 +4,7 @@ Automated GAM covariate validation & selection for [mgcv](https://cran.r-project
 
 Given a response and a pool of candidate covariates, `select_gam_covariates()`:
 
-1. **Profiles the response** and auto-suggests a family (count / proportion / positive / gaussian branches), ranked by AIC. Only families whose AIC is comparable are ranked against each other, so Tweedie is not auto-suggested for counts or for proportions with exact 0/1; pass `family = tw` to use it. Dispersion and a DHARMa residual-uniformity p-value are reported alongside for you to inspect, but do not affect the choice — and since both are measured on the structural-only model, a low `resid_ks_p` reflects not-yet-modelled covariates and structure as much as the family. Re-check it on the final fit before acting on it.
+1. **Profiles the response** and auto-suggests a family (count / proportion / positive / gaussian branches), ranked by AIC. Only families whose AIC is comparable are ranked against each other, so Tweedie is not auto-suggested for counts or for proportions with exact 0/1; pass `family = tw` to use it. Dispersion and a DHARMa residual-uniformity p-value are reported alongside for you to inspect, but do not affect the choice — and since both are measured on the structural-only model, a low `resid_ks_p` reflects not-yet-modelled covariates and structure as much as the family. The result's `final_check` reports both measures for the final model; compare the two before acting on it.
 2. **Forward-selects** a decorrelated, prediction-relevant covariate subset, scored by random/spatial-block CV skill, with a concurvity gate and a 1-SE stopping rule. Fold construction is set by `cv_scheme`: `"spatial"` (block CV, the default) or `"stratified"` — random k-fold stratified on the response, for binomial / low-prevalence targets where spatial blocks would leave folds with too few positives.
 3. Runs a **backward elimination re-check** (BIC), a final `select=TRUE` shrinkage fit, and adequacy diagnostics.
 
@@ -62,4 +62,4 @@ Written to `outdir` (by default the session's temporary directory, so set it to 
 - `partial_effects.png` — partial effect plots of the kept smooths
 - `covariate_selection_log.txt` — the run log: console output plus warnings, messages and the error that stopped a failed run (written when `verbose = TRUE`; rename or disable it with `logfile`)
 
-The returned list carries the fitted `mgcv` model, the kept covariate set, the chosen family, the decision table, the selection path, the final formula, deviance explained, the CV folds, and the path to the run log.
+The returned list carries the fitted `mgcv` model, the kept covariate set, the chosen family, the decision table, the selection path, the final formula, deviance explained, the held-out deviance gained by the kept covariates (`cv`), the final model's dispersion and residual-uniformity check (`final_check`), the CV folds, and the path to the run log.

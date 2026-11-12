@@ -65,6 +65,8 @@ test_that("a final model with no smooth terms is handled", {
                                logfile = NULL, verbose = FALSE)
   expect_length(res$kept, 0)
   expect_true(all(is.na(res$decision$final_edf)))
+  expect_identical(res$cv$gain, 0)                 # nothing kept, nothing gained
+  expect_identical(res$cv$structural, res$cv$selected)
 })
 
 test_that("a parametric structural term doesn't break the partial-effects plot", {

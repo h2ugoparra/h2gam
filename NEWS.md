@@ -16,6 +16,15 @@
 
 ## New features
 
+* The result gains `final_check`: the Pearson dispersion and the DHARMa
+  residual-uniformity p-value of the final model. Until now both were only
+  reported for the structural-only model in the family table, before any
+  covariate was in, and re-checking them on the final fit was left to you.
+* The result gains `cv`: the mean held-out deviance of the structural-only
+  model and of the model with the kept covariates, and their paired gain
+  with its standard error. It is scored on the folds used for selection,
+  so it is an optimistic guide rather than an independent test. Both are
+  printed in the result section of the log.
 * Verbose output, and so the run log, now opens with a header giving the
   h2gam, mgcv and R versions, the time, and every setting of the run
   (response, candidates, structural terms, family, thresholds, CV setup). A

@@ -168,6 +168,22 @@ test_that("a concurvity-rejected candidate is not scored again", {
   expect_identical(max(fw$path$step), 2)
 })
 
+test_that("the result reports the CV gain of the kept set and final-model checks", {
+  skip_on_cran()
+  res <- run(sim_counts(), structural = "te(lon, lat)")
+  expect_identical(res$kept, "sst")
+  # one covariate kept: the summary is its accepted step
+  acc <- res$path[res$path$action == "accept", ]
+  expect_equal(res$cv$gain, acc$cv_gain)
+  expect_equal(res$cv$se, acc$cv_se)
+  expect_equal(res$cv$structural - res$cv$selected, res$cv$gain)
+  expect_identical(res$cv$folds, 3L)
+
+  expect_true(is.finite(res$final_check$dispersion))
+  p <- res$final_check$resid_ks_p
+  expect_true(is.na(p) || (p >= 0 && p <= 1))
+})
+
 test_that("a CV fold lost to the reference model is reported", {
   df <- sim_counts(n = 120)
   folds <- rep(1:3, c(30, 40, 50))          # training sizes 90, 80, 70

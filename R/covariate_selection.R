@@ -602,6 +602,7 @@ forward_select <- function(data, response, candidates, structural, family_gen,
   # not be scored on is lost to every candidate compared against it, because
   # the gain is paired per fold. Track the worst case to report it.
   ref_folds <- sum(is.finite(cur_dev))
+  base_dev  <- cur_dev
   path      <- list()
   step      <- 0
   low_folds <- character()                 # candidates scored on < half the folds
@@ -672,7 +673,9 @@ forward_select <- function(data, response, candidates, structural, family_gen,
                            "concurvity gate could not be applied."),
                     paste(ungated, collapse = ", ")), call. = FALSE)
 
-  list(accepted = accepted,
+  # base_dev / acc_dev: per-fold held-out deviance of the structural-only model
+  # and of the accepted set; fold_dev scores any other covariate set the same way.
+  list(accepted = accepted, base_dev = base_dev, acc_dev = cur_dev, fold_dev = fold_dev,
        path = if (length(path)) do.call(rbind, path) else NULL,
        scores = if (length(last)) do.call(rbind, last) else NULL)
 }
@@ -771,7 +774,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   `dispersion` and `resid_ks_p` columns are diagnostics to inspect, not
 #'   inputs to the choice. Both are measured before covariate selection, so a
 #'   low `resid_ks_p` reflects not-yet-modelled covariates and structure as much
-#'   as the family -- re-check it on the final fit before acting on it.
+#'   as the family -- compare it with `final_check` in the result, which
+#'   reports both measures for the final model.
 #'   Alternatively a family object (e.g. `nb()`) or a zero-argument family
 #'   generator (e.g. `nb`) to skip the suggestion step. For a family object
 #'   with an estimated shape parameter, theta is reset to its supplied value
@@ -835,7 +839,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   decision table, also written to `covariate_decision_table.csv`; see
 #'   below), `path`
 #'   (forward-selection steps), `formula` (final formula as a string),
-#'   `dev_expl` (deviance explained), `folds` (integer fold vector, one per row used in the search), and
+#'   `dev_expl` (deviance explained), `cv` and `final_check` (see below), `folds` (integer fold vector, one per row used in the search), and
 #'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
 #'   The `decision` table has one row per candidate. `cv_gain` and `cv_se`
@@ -850,6 +854,19 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   failed"` (the fits or held-out predictions failed on too many folds); or
 #'   the univariate-screen reason (`"absent"`, `"non-numeric"`, `"NA <n>%"`,
 #'   `"zero variance"`), for which the CV columns are `NA`.
+#'
+#'   `cv` summarises what the kept covariates buy out of fold: `structural`
+#'   and `selected` are the mean held-out deviance of the structural-only
+#'   model and of the model with the kept covariates, `gain` and `se` their
+#'   mean paired per-fold difference and its standard error, and `folds` the
+#'   number of folds scored. It uses the search fits on the folds the
+#'   covariates were selected on, so it is an optimistic guide, not an
+#'   independent test.
+#'
+#'   `final_check` holds `dispersion` (Pearson) and `resid_ks_p` (DHARMa
+#'   residual uniformity; `NA` without DHARMa) for the final model. The
+#'   family table reports the same two measures for the structural-only
+#'   model, before any covariate is in.
 #'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
 #'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`,
@@ -1085,6 +1102,21 @@ select_covariates_impl <- function(
   model <- final_fit(final_data, response, kept, structural, family_gen, knots,
                      offset = offset, squeeze = squeeze)
 
+  # -- what was gained, and whether the final model is adequate -------------
+  # Held-out deviance of the kept set against the structural-only model, on
+  # the search fits and folds. The covariates were chosen on these folds, so
+  # this is an optimistic guide, not an independent test.
+  kept_dev <- if (identical(kept, fw$accepted)) fw$acc_dev else fw$fold_dev(kept)
+  ok   <- is.finite(fw$base_dev) & is.finite(kept_dev)
+  gain <- (fw$base_dev - kept_dev)[ok]
+  cv <- list(structural = mean(fw$base_dev[ok]), selected = mean(kept_dev[ok]),
+             gain = mean(gain), se = stats::sd(gain) / sqrt(length(gain)), folds = sum(ok))
+  # The family table's dispersion / resid_ks_p describe the structural-only
+  # model; these are the same two measures on the model actually returned.
+  final_check <- list(
+    dispersion = sum(residuals(model, type = "pearson")^2) / model$df.residual,
+    resid_ks_p = dharma_ks(model))
+
   # -- decision table ------------------------------------------------------
   edf <- {
     s <- summary(model)$s.table                     # NULL when the model has no smooths
@@ -1170,6 +1202,14 @@ select_covariates_impl <- function(
     cat("\n== Result ==\n")
     cat("kept:", if (length(kept)) paste(kept, collapse = ", ") else "(none)", "\n")
     cat(sprintf("deviance explained: %.1f%%\n", 100 * dev_expl))
+    cat(sprintf(paste0("held-out deviance (mean of %d folds): structural only %.4f, with kept ",
+                       "covariates %.4f; gain %.4f (se %.4f)\n"),
+                cv$folds, cv$structural, cv$selected, cv$gain, cv$se))
+    cat("  (scored on the folds used for selection: an optimistic guide, not an independent test)\n")
+    cat(sprintf("final model adequacy: dispersion %.3f, residual uniformity p = %s\n",
+                final_check$dispersion,
+                if (is.na(final_check$resid_ks_p)) "NA (needs DHARMa)" else
+                  format.pval(final_check$resid_ks_p, digits = 3)))
     cat("formula:", final_formula, "\n")
     cat("outputs ->", normalizePath(outdir), "\n")
 
@@ -1182,6 +1222,6 @@ select_covariates_impl <- function(
 
   invisible(list(model = model, kept = kept, family = fs$chosen,
                  decision = decision, path = fw$path, formula = final_formula,
-                 dev_expl = dev_expl, folds = folds,
+                 dev_expl = dev_expl, cv = cv, final_check = final_check, folds = folds,
                  logfile = if (do_log) file.path(outdir, logfile) else NULL))
 }
