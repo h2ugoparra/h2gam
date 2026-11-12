@@ -45,6 +45,35 @@ test_that("a factor random-effect variable still selects the real driver", {
   expect_true("sst" %in% res$kept)
 })
 
+test_that("every random-effect form is excluded from held-out prediction", {
+  expect_true(is_re_smooth(s(v, bs = "re")))
+  expect_true(is_re_smooth(s(x, v, bs = "fs")))
+  expect_true(is_re_smooth(te(x, v, bs = c("tp", "re"))))
+  expect_false(is_re_smooth(s(x)))
+  expect_false(is_re_smooth(1))
+
+  # A strong per-vessel effect with one vessel per fold: held-out vessels are
+  # unseen, so a term left in the prediction costs the fold or its accuracy.
+  df <- sim_counts(n = 240)
+  df$vessel <- factor(rep(letters[1:6], each = 40))
+  df$catch  <- rpois(240, exp(1 + 0.8 * sin(2 * df$sst) + rep(rnorm(6), each = 40)))
+  folds <- rep(rep(1:3, each = 40), 2)
+  for (term in c("s(vessel, bs='re')", "s(vessel, sst, bs='re')",
+                 "s(vessel, bs='re', by=eff)", "s(lat, vessel, bs='fs', k=4)")) {
+    fw <- forward_select(df, "catch", "sst", c("te(lon, lat, k=4)", term),
+                         family_gen = function() poisson(), folds = folds,
+                         knots = NULL, verbose = FALSE)
+    expect_true(is.finite(fw$scores$cv_gain), info = term)
+  }
+})
+
+test_that("a random-effect term with no factor is rejected whatever its form", {
+  df <- sim_counts()
+  expect_error(run(df, structural = "s(sst, year, bs='re')"),
+               "needs 'sst' or 'year' to be a factor")
+  expect_error(run(df, structural = "s(lat, nope, bs='fs')"), "column 'nope' not found")
+})
+
 test_that("decision-table na_frac reflects the data as supplied", {
   skip_on_cran()
   df <- sim_counts()

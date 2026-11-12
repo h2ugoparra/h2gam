@@ -45,7 +45,7 @@ Non-obvious invariants to preserve when editing:
 
 - **Family generators are zero-arg closures, called fresh per fit** — `nb()`/`tw()` carry mutable theta/p state in their environment, so a shared family object leaks state across fits.
 - **Search fits vs final fit are deliberately different**: the search uses `bam(discrete = TRUE, method = "fREML")` with the family shape parameter *fixed* at its structural-only estimate (`make_select_gen`, for auto-suggested and user-supplied families alike) — for speed, and because held-out deviance is only comparable between models sharing the shape value; the final fit is a free `gam(method = "REML", select = TRUE)`.
-- **Random-effect structural terms (`bs = 're'`) are excluded from held-out CV prediction** (via `predict(..., exclude = ...)` plus a factor-level remap), matching deployment behavior.
+- **Random-effect structural terms are excluded from held-out CV prediction** (via `predict(..., exclude = ...)` plus a remap of unseen factor levels), matching deployment behavior. They are detected from the fitted smooth's class (`is_re_smooth`: `bs = 're'` in any form, `bs = 'fs'`, tensor `'re'` margins), not by parsing the term string.
 - **The SV squeeze for betar is applied once, up front**, so the CV search and the final fit see the same (0,1) response.
 - **Structural terms are forced in and never screened** — candidates must improve CV skill over and above them.
 - mgcv is in `Depends` (not just Imports) on purpose, so `s()`/`te()` and family constructors are visible to users writing structural terms; the package's own code still binds via explicit `@importFrom` (see `R/h2gam-package.R`).

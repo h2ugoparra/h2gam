@@ -39,7 +39,7 @@ res <- select_gam_covariates(
 saveRDS(res$model, "output/my_target/gam_model.rds")
 ```
 
-The variable in a random-effect structural term such as `s(year, bs='re')` must be a factor. On a numeric variable mgcv fits a penalised slope instead of random intercepts, so `select_gam_covariates()` stops with an error asking you to convert it. The default `structural` includes `s(year, bs='re')`, so this applies whenever you rely on the defaults.
+Random-effect structural terms (`bs='re'` in any form, `bs='fs'`, tensor terms with an `'re'` margin) are excluded from held-out CV prediction. The variable in a random-effect structural term such as `s(year, bs='re')` must be a factor. On a numeric variable mgcv fits a penalised slope instead of random intercepts, so `select_gam_covariates()` stops with an error asking you to convert it. The default `structural` includes `s(year, bs='re')`, so this applies whenever you rely on the defaults.
 
 Each project keeps its own short driver script (data loading, preprocessing, target list); the selection logic lives here. See `?select_gam_covariates` for the full argument reference and a runnable synthetic example, or `inst/examples/synthetic_demo.R` for a self-contained end-to-end demo.
 

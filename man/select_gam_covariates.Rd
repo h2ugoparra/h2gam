@@ -161,8 +161,12 @@ shrinkage fit, and adequacy diagnostics.
 Every threshold is a logged, overridable argument; nothing is hardcoded to
 a particular dataset. Structural (spatial/temporal) terms are forced in and
 not screened -- covariates must earn their place over and above them.
-Random-effect structural terms (\code{bs = "re"}) are excluded from held-out CV
-prediction, matching a deployment \code{predict(..., exclude = ...)}.
+Random-effect structural terms are excluded from held-out CV prediction,
+matching a deployment \code{predict(..., exclude = ...)}. That covers every
+\code{bs = "re"} form (random intercepts, random slopes such as
+\code{s(vessel, sst, bs = "re")}, \verb{by =} variables), factor-smooth interactions
+(\code{bs = "fs"}), and tensor terms with an \code{"re"} margin. Each needs a factor
+grouping variable.
 
 Search fits use \code{mgcv::bam(discrete = TRUE)} with the family shape
 parameter (negbin theta, Tweedie p, beta precision, scaled-t df and scale)
