@@ -233,6 +233,14 @@ make_select_gen <- function(free_gen, fit) {
   2 * asin(root)
 }
 
+# Stop with a clear message when named columns are missing from `data`.
+.need_cols <- function(data, cols, what) {
+  miss <- setdiff(cols, names(data))
+  if (length(miss))
+    stop(sprintf("%s column(s) not found in data: %s.", what, paste(miss, collapse = ", ")),
+         call. = FALSE)
+}
+
 # Snapshot the caller's RNG state and return a function that restores it, so
 # the fold builders can set.seed() for reproducibility without overwriting the
 # user's random-number stream. Call it on entry, run the result on exit:
@@ -315,7 +323,11 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
                                crs = NULL, linkage = "average", pca_var = 0.95,
                                seed = 42, verbose = TRUE) {
   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
+  if (length(coords) != 2) stop("`coords` must name exactly two columns.")
+  .need_cols(data, coords, "coords"); .need_cols(data, response, "response")
   c1 <- data[[coords[1]]]; c2 <- data[[coords[2]]]           # coord 1 (x/lon), coord 2 (y/lat)
+  if (!all(is.finite(c1) & is.finite(c2) & is.finite(data[[response]])))
+    stop("make_spatial_folds: missing or non-finite values in the coordinates or response; drop those rows first.")
   # hclust's "ward" is the legacy alias for "ward.D"; scikit-learn's Ward (which
   # SPCV mirrors) is "ward.D2".
   if (identical(linkage, "ward")) linkage <- "ward.D2"
@@ -354,6 +366,8 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
   # -- Stage 2: cluster ensemble (HBGF) -> folds --------------------------
   num  <- candidates[vapply(candidates, function(v) is.numeric(data[[v]]), logical(1))]
   Xmat <- as.matrix(data[, num, drop = FALSE])
+  if (!all(is.finite(Xmat)))
+    stop("make_spatial_folds: missing or non-finite values in the numeric candidates; drop those rows first.")
   bmean <- function(v) as.numeric(tapply(v, blocks, mean))
   block_coords <- cbind(bmean(loc[, 1]), bmean(loc[, 2]))    # projected coords when euclidean
   block_y      <- matrix(bmean(data[[response]]), ncol = 1)
@@ -420,7 +434,9 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
 #' @export
 make_stratified_folds <- function(data, response, k = 5, seed = 1, verbose = TRUE) {
   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
+  .need_cols(data, response, "response")
   y <- data[[response]]
+  if (anyNA(y)) stop("make_stratified_folds: the response has missing values; drop those rows first.")
   # Strata: exact label values for a few-valued response (binary / integer
   # label), else quantile bins so a continuous response stays balanced too.
   strata <- if (length(unique(y[is.finite(y)])) <= max(k, 10)) {
@@ -701,7 +717,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' @param candidates Character vector of candidate covariate names. Each enters
 #'   the model as a `s(<name>)` smooth.
 #' @param structural Character vector of mgcv terms forced into every model
-#'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`.
+#'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`. May be
+#'   `character()` for an intercept-only baseline.
 #' @param coords Length-2 character vector naming the longitude and latitude
 #'   columns, used for spatial folds and complete-case filtering.
 #' @param family `"auto"` (default) profiles the response and takes the
@@ -831,8 +848,22 @@ select_gam_covariates <- function(
     seed           = 1,
     verbose        = TRUE) {
 
-  stopifnot(response %in% names(data))
+  if (!is.data.frame(data)) stop("`data` must be a data.frame.")
+  .need_cols(data, response, "response")
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
+  if (cv_scheme == "spatial") {            # fail before the family fits, not after
+    if (length(coords) != 2) stop("`coords` must name exactly two columns.")
+    .need_cols(data, coords, "coords")
+  }
+  if (response %in% candidates)
+    stop(sprintf("the response '%s' is also listed in `candidates`.", response))
+  if (anyDuplicated(candidates)) {
+    warning(sprintf("duplicate candidates dropped: %s.",
+                    paste(unique(candidates[duplicated(candidates)]), collapse = ", ")),
+            call. = FALSE)
+    candidates <- unique(candidates)
+  }
+  if (!length(structural)) structural <- "1"   # nothing forced in: intercept-only baseline
   if (!is.null(offset)) {
     if (!offset %in% names(data)) stop(sprintf("offset column '%s' not found in data.", offset))
     if (any(data[[offset]] <= 0, na.rm = TRUE))
@@ -1020,7 +1051,10 @@ select_gam_covariates <- function(
   # model$call$data (the symbol `data`) in the formula's environment -- the
   # global env, where `data` is utils::data. Give a plot-only copy the frame.
   pmodel <- model; pmodel$call$data <- final_data
+  # A plot failure (e.g. an intercept-only model has no terms to plot) must not
+  # cost the caller the finished selection: put the message in the PNG instead.
   tryCatch(plot(pmodel, pages = 1, scale = 0, all.terms = TRUE, shade = TRUE),
+           error = function(e) { graphics::plot.new(); graphics::title(conditionMessage(e)) },
            finally = grDevices::dev.off())
 
   final_formula <- paste(deparse(formula(model)), collapse = " ")

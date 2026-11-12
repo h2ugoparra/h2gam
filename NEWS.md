@@ -9,6 +9,22 @@
   zero or less, `"CV gain below 1 SE"` marks a positive gain that failed the
   one-standard-error rule, and `"CV scoring failed"` marks candidates whose
   fits or held-out predictions failed.
+* `structural = character()` is now accepted and gives an intercept-only
+  baseline; it used to fail with a formula parse error.
+
+## Input validation
+
+* `select_gam_covariates()` now stops with a clear message when `data` is
+  not a data.frame, when the response or (for spatial CV) the `coords`
+  columns are missing, or when the response is listed among the candidates.
+  Missing `coords` used to surface as "must have n >= 2 objects to cluster"
+  after the family fits had already run. Duplicate candidates are dropped
+  with a warning.
+* `make_spatial_folds()` and `make_stratified_folds()` stop on missing
+  columns and on missing or non-finite values. `make_stratified_folds()`
+  used to return fold id 0 for rows with a missing response.
+* A failure in the partial-effects plot no longer discards the finished
+  selection; the message is written into `partial_effects.png` instead.
 
 ## Bug fixes
 
