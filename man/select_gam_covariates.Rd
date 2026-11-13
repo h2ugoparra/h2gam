@@ -54,7 +54,8 @@ pass \code{family = tw} to use it. The reported
 \code{dispersion} and \code{resid_ks_p} columns are diagnostics to inspect, not
 inputs to the choice. Both are measured before covariate selection, so a
 low \code{resid_ks_p} reflects not-yet-modelled covariates and structure as much
-as the family -- re-check it on the final fit before acting on it.
+as the family -- compare it with \code{final_check} in the result, which
+reports both measures for the final model.
 Alternatively a family object (e.g. \code{nb()}) or a zero-argument family
 generator (e.g. \code{nb}) to skip the suggestion step. For a family object
 with an estimated shape parameter, theta is reset to its supplied value
@@ -134,7 +135,7 @@ covariate names), \code{family} (chosen family label), \code{decision} (per-cand
 decision table, also written to \code{covariate_decision_table.csv}; see
 below), \code{path}
 (forward-selection steps), \code{formula} (final formula as a string),
-\code{dev_expl} (deviance explained), \code{folds} (integer fold vector, one per row used in the search), and
+\code{dev_expl} (deviance explained), \code{cv} and \code{final_check} (see below), \code{folds} (integer fold vector, one per row used in the search), and
 \code{logfile} (path to the run log, or \code{NULL} if none was written).
 
 The \code{decision} table has one row per candidate. \code{cv_gain} and \code{cv_se}
@@ -147,6 +148,19 @@ candidate was rejected; a warning names it);
 \code{"backward-BIC"}; \code{"no CV improvement"} (gain <= 0); \code{"CV gain below 1 SE"} (positive gain smaller than its standard error); \code{"CV scoring failed"} (the fits or held-out predictions failed on too many folds); or
 the univariate-screen reason (\code{"absent"}, \code{"non-numeric"}, \code{"NA <n>\%"},
 \code{"zero variance"}), for which the CV columns are \code{NA}.
+
+\code{cv} summarises what the kept covariates buy out of fold: \code{structural}
+and \code{selected} are the mean held-out deviance of the structural-only
+model and of the model with the kept covariates, \code{gain} and \code{se} their
+mean paired per-fold difference and its standard error, and \code{folds} the
+number of folds scored. It uses the search fits on the folds the
+covariates were selected on, so it is an optimistic guide, not an
+independent test.
+
+\code{final_check} holds \code{dispersion} (Pearson) and \code{resid_ks_p} (DHARMa
+residual uniformity; \code{NA} without DHARMa) for the final model. The
+family table reports the same two measures for the structural-only
+model, before any covariate is in.
 
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
 \code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png},
