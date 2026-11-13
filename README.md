@@ -43,7 +43,7 @@ Random-effect structural terms (`bs='re'` in any form, `bs='fs'`, tensor terms w
 
 Two things the search does differently from the final fit:
 
-- **Rows.** The search runs on the rows complete for every candidate that passes the univariate screen, so each CV model sees the same data. The final model is refitted on all rows complete for the kept covariates, so a sparse candidate that is not selected does not cost the final model its rows.
+- **Rows.** The search runs on the rows complete for every candidate that passes the univariate screen, so each CV model sees the same data. The log lists the rows each candidate costs, and a warning names them when together they cost more than 10% of the rows. The final model is refitted on all rows complete for the kept covariates, so a sparse candidate that is not selected does not cost the final model its rows.
 - **Family shape.** A shape parameter (negative binomial theta, Tweedie p, beta precision, scaled-t df and scale) is held fixed at its structural-only estimate during the search, whether the family was auto-suggested or supplied, because held-out deviance is only comparable between models that share it. The final fit estimates it freely.
 
 Each project keeps its own short driver script (data loading, preprocessing, target list); the selection logic lives here. See `?select_gam_covariates` for the full argument reference and a runnable synthetic example, or `inst/examples/synthetic_demo.R` for a self-contained end-to-end demo.

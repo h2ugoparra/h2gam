@@ -16,6 +16,12 @@
 
 ## New features
 
+* The log now lists how many search rows each candidate costs through its
+  missing values, and a warning names those candidates when together they
+  cost more than 10% of the rows. The search runs on the rows complete for
+  every screened-in candidate, so a sparse candidate shrinks the data behind
+  every CV score even when it is not selected; until now only the total was
+  logged.
 * The result gains `final_check`: the Pearson dispersion and the DHARMa
   residual-uniformity p-value of the final model. Until now both were only
   reported for the structural-only model in the family table, before any

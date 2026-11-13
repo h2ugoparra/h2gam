@@ -792,7 +792,9 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the univariate screen. The search runs on the rows complete for every
 #'   candidate that passes, so each CV model sees the same data; a sparse
 #'   candidate therefore costs the search rows even if it is not selected. The
-#'   final model is refitted on all rows complete for the kept covariates.
+#'   log lists the rows each candidate costs, and a warning names them when
+#'   together they cost more than 10% of the rows. The final model is refitted
+#'   on all rows complete for the kept covariates.
 #' @param cv_k Number of CV folds.
 #' @param cv_scheme Fold construction: `"spatial"` (SPCV, the default; see
 #'   [make_spatial_folds()]) or `"stratified"` (non-spatial k-fold stratified
@@ -1065,6 +1067,22 @@ select_covariates_impl <- function(
   data <- full_data[usable(c(model_vars, coords, scr$keep)), ]
   if (verbose) cat(sprintf("  search rows: %d of %d (complete for every screened-in candidate)\n",
                            nrow(data), nrow(full_data)))
+  # Which candidates cost those rows: each one's incomplete rows among the rows
+  # otherwise usable. A candidate costs them whether or not it is selected.
+  base_ok <- usable(c(model_vars, coords))
+  cost <- vapply(scr$keep, function(v) sum(base_ok & !usable(v)), numeric(1))
+  cost <- sort(cost[cost > 0], decreasing = TRUE)
+  if (length(cost)) {
+    cost_txt <- paste(sprintf("%s %d", names(cost), cost), collapse = ", ")
+    if (verbose) cat("  rows lost to missing values in:", cost_txt, "\n")
+    lost <- sum(base_ok) - nrow(data)
+    if (lost > 0.10 * sum(base_ok))
+      warning(sprintf(paste0("the search lost %d of %d rows (%.0f%%) to missing values in the ",
+                             "candidates (rows each: %s). Every model in the search loses them, ",
+                             "whether or not the candidate is selected; drop a candidate from ",
+                             "`candidates`, or lower `na_max`, to keep its rows."),
+                      lost, sum(base_ok), 100 * lost / sum(base_ok), cost_txt), call. = FALSE)
+  }
 
   # SV squeeze applied HERE so the search sees the same (0,1) response as the
   # final fit -- raw 0/1 values give non-finite beta deviance in the CV scoring.

@@ -46,9 +46,13 @@ test_that("a sparse unselected candidate does not cost the final fit its rows", 
   df$catch <- rnbinom(n, mu = exp(1 + 0.8 * sin(2 * df$sst)), size = 3)
   df$noise[1:80] <- NA
   df$sst[81:90]  <- NA
-  res <- select_gam_covariates(df, "catch", c("sst", "noise"), structural = "te(lon, lat)",
-                               cv_k = 3, cv_scheme = "stratified", outdir = tempdir(),
-                               logfile = NULL, verbose = FALSE)
+  # the search does lose them, and the warning names the candidates responsible
+  expect_warning(
+    res <- select_gam_covariates(df, "catch", c("sst", "noise"), structural = "te(lon, lat)",
+                                 cv_k = 3, cv_scheme = "stratified", outdir = tempdir(),
+                                 logfile = NULL, verbose = FALSE),
+    "lost 90 of 300 rows (30%) to missing values in the candidates (rows each: noise 80, sst 10)",
+    fixed = TRUE)
   expect_identical(res$kept, "sst")
   expect_length(res$folds, n - 90)                 # search: complete for both candidates
   expect_equal(nrow(res$model$model), n - 10)      # final fit: complete for sst only
