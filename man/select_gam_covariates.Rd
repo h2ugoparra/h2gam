@@ -75,7 +75,9 @@ the actual removal).}
 the univariate screen. The search runs on the rows complete for every
 candidate that passes, so each CV model sees the same data; a sparse
 candidate therefore costs the search rows even if it is not selected. The
-final model is refitted on all rows complete for the kept covariates.}
+log lists the rows each candidate costs, and a warning names them when
+together they cost more than 10\% of the rows. The final model is refitted
+on all rows complete for the kept covariates.}
 
 \item{cv_k}{Number of CV folds.}
 
