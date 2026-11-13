@@ -143,11 +143,14 @@ below), \code{path}
 The \code{decision} table has one row per candidate. \code{cv_gain} and \code{cv_se}
 are the mean paired per-fold drop in held-out deviance from adding the
 candidate, and its standard error, at the step that decided its fate:
-the step it was accepted or rejected for concurvity, otherwise the last
-step it was scored. \code{reason} is one of \code{"selected"}; \code{"concurvity"};
+the step it was accepted or rejected for concurvity, the backward
+re-check that dropped it, otherwise the last step it was scored.
+\code{reason} is one of \code{"selected"}; \code{"concurvity"};
 \code{"concurvity check failed"} (concurvity could not be computed, so the
 candidate was rejected; a warning names it);
-\code{"backward-BIC"}; \code{"no CV improvement"} (gain <= 0); \code{"CV gain below 1 SE"} (positive gain smaller than its standard error); \code{"CV scoring failed"} (the fits or held-out predictions failed on too many folds); or
+\code{"backward-CV"} (accepted, but with the later covariates in the model
+removing it no longer cost at least one standard error of held-out
+deviance); \code{"no CV improvement"} (gain <= 0); \code{"CV gain below 1 SE"} (positive gain smaller than its standard error); \code{"CV scoring failed"} (the fits or held-out predictions failed on too many folds); or
 the univariate-screen reason (\code{"absent"}, \code{"non-numeric"}, \code{"NA <n>\%"},
 \code{"zero variance"}), for which the CV columns are \code{NA}.
 
@@ -177,7 +180,8 @@ positive / gaussian branches), ranked by AIC alone;
 scored by cross-validated held-out deviance (spatial-block or
 response-stratified folds), with a concurvity gate and a 1-SE stopping
 rule;
-\item runs a backward elimination re-check (BIC), a final \code{select = TRUE}
+\item runs a backward elimination re-check (each accepted covariate must still
+pass the same CV rule against all the others), a final \code{select = TRUE}
 shrinkage fit, and adequacy diagnostics.
 }
 }

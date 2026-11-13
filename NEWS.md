@@ -2,6 +2,16 @@
 
 ## Breaking changes
 
+* The backward re-check now uses the criterion of the forward search
+  instead of BIC. An accepted covariate stays only if removing it from the
+  accepted set costs held-out deviance by at least one standard error
+  (paired per fold, same folds). BIC was computed on in-sample fits with
+  the family shape held fixed, so a covariate could be accepted for its
+  cross-validated skill and then dropped by an unrelated in-sample
+  criterion. Selections may change where the backward step used to drop a
+  covariate, or where an early covariate is made redundant by later ones.
+  The decision-table reason `"backward-BIC"` is now `"backward-CV"`, and
+  `cv_gain` / `cv_se` on such a row are the scores of that re-check.
 * `make_spatial_folds()` now defaults to `linkage = "ward.D2"`, the default
   `select_gam_covariates()` already passed, instead of `"average"`. Called
   directly with `metric = "euclidean"` and no `linkage`, it returns different

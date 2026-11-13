@@ -216,3 +216,31 @@ test_that("a missing random-effect variable is reported as missing", {
   expect_error(run(df, structural = c("s(year, bs='re')", "te(lon, lat)")),
                "column 'year' not found")
 })
+
+test_that("the backward re-check drops a covariate made redundant by a later one", {
+  # per-fold held-out deviance by covariate set: b alone does as well as a + b
+  dev <- list("a,b" = c(1.00, 1.10, 0.90), "b" = c(1.01, 1.09, 0.90),
+              "a" = c(1.50, 1.60, 1.40), "a,b,c" = c(0.80, 0.90, 0.70),
+              "b,c" = c(0.81, 0.89, 0.70), "a,c" = c(1.30, 1.45, 1.20),
+              "c" = c(1.40, 1.55, 1.30))
+  fake <- function(accepted) list(
+    accepted = accepted, acc_dev = dev[[paste(sort(accepted), collapse = ",")]],
+    fold_dev = function(terms) dev[[paste(sort(terms), collapse = ",")]])
+
+  bw <- backward_recheck(fake(c("a", "b")), verbose = FALSE)
+  expect_identical(bw$kept, "b")
+  expect_identical(bw$dev, dev[["b"]])
+  expect_identical(bw$dropped$var, "a")
+  expect_lt(bw$dropped$cv_gain, bw$dropped$cv_se)
+
+  # after a drop the survivors are re-tested, and both still earn their place
+  bw <- backward_recheck(fake(c("a", "b", "c")), verbose = FALSE)
+  expect_identical(bw$kept, c("b", "c"))
+
+  # nothing accepted, or one covariate: nothing to re-test
+  expect_identical(backward_recheck(fake(character()), verbose = FALSE)$kept, character())
+  one <- backward_recheck(list(accepted = "a", acc_dev = dev[["a"]],
+                               fold_dev = function(terms) stop("not called")), verbose = FALSE)
+  expect_identical(one$kept, "a")
+  expect_null(one$dropped)
+})
