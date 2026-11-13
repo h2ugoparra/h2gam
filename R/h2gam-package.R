@@ -7,7 +7,7 @@
 # below is what the package's own code binds against (and keeps R CMD check
 # quiet about the Depends-but-not-imported namespace).
 #' @importFrom mgcv gam bam nb tw betar scat concurvity gam.check
-#' @importFrom stats AIC BIC Gamma binomial gaussian poisson
+#' @importFrom stats AIC Gamma binomial gaussian poisson
 #' @importFrom stats formula predict residuals
 #' @importFrom graphics par plot
 NULL

@@ -10,7 +10,7 @@
 #   2. forward-selects a DECORRELATED, prediction-relevant covariate subset,
 #      scored by cross-validated skill (spatial-block or stratified folds),
 #      with a concurvity gate and a 1-SE stopping rule;
-#   3. runs a backward elimination re-check (BIC), a final select=TRUE
+#   3. runs a backward elimination re-check (same CV rule), a final select=TRUE
 #      shrinkage fit, and adequacy diagnostics.
 #
 # Every threshold is an overridable argument. The defaults for `structural`
@@ -681,31 +681,42 @@ forward_select <- function(data, response, candidates, structural, family_gen,
 }
 
 # ---------------------------------------------------------------------------
-# 5. Backward re-check (BIC-based) & final shrinkage fit
+# 5. Backward re-check (CV-based) & final shrinkage fit
 # ---------------------------------------------------------------------------
 
-backward_recheck <- function(data, response, accepted, structural, family_gen,
-                             knots, offset = NULL, verbose = TRUE) {
-  off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
-  build <- function(terms) stats::as.formula(
-    paste(response, "~", paste(c(structural, off_term, sprintf("s(%s)", terms)), collapse = " + "))
-  )
-  fit <- function(terms) fit_search(build(terms), data, family_gen, knots)
+# Re-tests each accepted covariate against the others with the forward
+# criterion: the held-out deviance lost by removing it (paired per fold) must
+# be positive and at least one standard error. A covariate accepted early can
+# lose its place once later ones are in. The weakest failing covariate is
+# dropped and the rest re-tested. `fw` is the forward_select() result.
+backward_recheck <- function(fw, verbose = TRUE) {
+  kept    <- fw$accepted
+  cur_dev <- fw$acc_dev
+  dropped <- list()
+  # On the first pass the last covariate accepted needs no re-test: it would
+  # repeat the entry test it has just passed.
+  skip <- utils::tail(kept, 1)
   repeat {
-    if (length(accepted) == 0) break
-    full <- fit(accepted); if (is.null(full)) break
-    bic_full <- BIC(full)
-    bic_drop <- vapply(accepted, function(v) {
-      r <- fit(setdiff(accepted, v)); if (is.null(r)) Inf else BIC(r)
-    }, numeric(1))
-    best <- which.min(bic_drop)
-    if (is.finite(bic_drop[best]) && bic_drop[best] < bic_full) {
-      if (verbose) cat(sprintf("  [backward] - %-18s  BIC %.1f -> %.1f\n",
-                               accepted[best], bic_full, bic_drop[best]))
-      accepted <- setdiff(accepted, accepted[best])
-    } else break
+    scored <- lapply(setdiff(kept, skip), function(v) {
+      dd   <- fw$fold_dev(setdiff(kept, v))
+      diff <- dd - cur_dev
+      list(v = v, dd = dd, mean = mean(diff, na.rm = TRUE),
+           se = stats::sd(diff, na.rm = TRUE) / sqrt(sum(is.finite(diff))))
+    })
+    # A covariate whose removal cannot be scored is kept.
+    fails <- Filter(function(s) is.finite(s$mean) &&
+                      !(s$mean > 0 && is.finite(s$se) && s$mean >= s$se), scored)
+    if (!length(fails)) break
+    w <- fails[[which.min(vapply(fails, function(s) s$mean, numeric(1)))]]
+    if (verbose) cat(sprintf("  [backward] - %-18s  CV gain %.4f (se %.4f)\n", w$v, w$mean, w$se))
+    dropped[[length(dropped) + 1]] <- data.frame(var = w$v, cv_gain = w$mean, cv_se = w$se)
+    kept    <- setdiff(kept, w$v)
+    cur_dev <- w$dd
+    skip    <- character()
   }
-  accepted
+  # dev: per-fold held-out deviance of the kept set
+  list(kept = kept, dev = cur_dev,
+       dropped = if (length(dropped)) do.call(rbind, dropped) else NULL)
 }
 
 final_fit <- function(data, response, accepted, structural, family_gen, knots,
@@ -732,7 +743,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'    scored by cross-validated held-out deviance (spatial-block or
 #'    response-stratified folds), with a concurvity gate and a 1-SE stopping
 #'    rule;
-#' 3. runs a backward elimination re-check (BIC), a final `select = TRUE`
+#' 3. runs a backward elimination re-check (each accepted covariate must still
+#'    pass the same CV rule against all the others), a final `select = TRUE`
 #'    shrinkage fit, and adequacy diagnostics.
 #'
 #' Every threshold is an overridable argument. The defaults for `structural`
@@ -847,11 +859,14 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   The `decision` table has one row per candidate. `cv_gain` and `cv_se`
 #'   are the mean paired per-fold drop in held-out deviance from adding the
 #'   candidate, and its standard error, at the step that decided its fate:
-#'   the step it was accepted or rejected for concurvity, otherwise the last
-#'   step it was scored. `reason` is one of `"selected"`; `"concurvity"`;
+#'   the step it was accepted or rejected for concurvity, the backward
+#'   re-check that dropped it, otherwise the last step it was scored.
+#'   `reason` is one of `"selected"`; `"concurvity"`;
 #'   `"concurvity check failed"` (concurvity could not be computed, so the
 #'   candidate was rejected; a warning names it);
-#'   `"backward-BIC"`; `"no CV improvement"` (gain <= 0); `"CV gain below 1
+#'   `"backward-CV"` (accepted, but with the later covariates in the model
+#'   removing it no longer cost at least one standard error of held-out
+#'   deviance); `"no CV improvement"` (gain <= 0); `"CV gain below 1
 #'   SE"` (positive gain smaller than its standard error); `"CV scoring
 #'   failed"` (the fits or held-out predictions failed on too many folds); or
 #'   the univariate-screen reason (`"absent"`, `"non-numeric"`, `"NA <n>%"`,
@@ -1108,9 +1123,9 @@ select_covariates_impl <- function(
                        verbose = verbose)
 
   # -- backward re-check ---------------------------------------------------
-  if (verbose) cat("\n== Backward re-check (BIC) ==\n")
-  kept <- backward_recheck(data, search_resp, fw$accepted, structural, select_gen,
-                           knots, offset = offset, verbose = verbose)
+  if (verbose) cat("\n== Backward re-check (CV) ==\n")
+  bw   <- backward_recheck(fw, verbose = verbose)
+  kept <- bw$kept
 
   # -- final fit + adequacy ------------------------------------------------
   final_data <- full_data[usable(c(model_vars, kept)), ]
@@ -1124,7 +1139,7 @@ select_covariates_impl <- function(
   # Held-out deviance of the kept set against the structural-only model, on
   # the search fits and folds. The covariates were chosen on these folds, so
   # this is an optimistic guide, not an independent test.
-  kept_dev <- if (identical(kept, fw$accepted)) fw$acc_dev else fw$fold_dev(kept)
+  kept_dev <- bw$dev
   ok   <- is.finite(fw$base_dev) & is.finite(kept_dev)
   gain <- (fw$base_dev - kept_dev)[ok]
   cv <- list(structural = mean(fw$base_dev[ok]), selected = mean(kept_dev[ok]),
@@ -1179,7 +1194,11 @@ select_covariates_impl <- function(
   fwd_acc <- if (!is.null(fw$path)) fw$path$var[fw$path$action == "accept"] else character()
   back_dropped <- setdiff(fwd_acc, kept)
   decision$status[match(back_dropped, decision$covariate)] <- "dropped"
-  decision$reason[match(back_dropped, decision$covariate)] <- "backward-BIC"
+  decision$reason[match(back_dropped, decision$covariate)] <- "backward-CV"
+  if (!is.null(bw$dropped)) {                       # the score that dropped it
+    mb <- match(bw$dropped$var, decision$covariate)
+    decision$cv_gain[mb] <- bw$dropped$cv_gain; decision$cv_se[mb] <- bw$dropped$cv_se
+  }
   ki <- match(kept, decision$covariate)
   decision$status[ki] <- "kept"; decision$reason[ki] <- "selected"
   decision$final_edf[ki] <- edf[kept]
