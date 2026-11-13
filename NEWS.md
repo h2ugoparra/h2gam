@@ -32,6 +32,11 @@
   every screened-in candidate, so a sparse candidate shrinks the data behind
   every CV score even when it is not selected; until now only the total was
   logged.
+* The result's `cv` gains `by_fold`, also printed in the result section: the
+  held-out deviance of the structural-only model and of the kept set, and
+  their difference, for each fold with its number of held-out rows. The
+  means alone hide a single fold that carries most of the gain, which is
+  also what a gain close to one standard error at every step points to.
 * The result gains `final_check`: the Pearson dispersion and the DHARMa
   residual-uniformity p-value of the final model. Until now both were only
   reported for the structural-only model in the family table, before any
