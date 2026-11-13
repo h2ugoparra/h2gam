@@ -116,7 +116,8 @@ directory, which R deletes when the session ends: pass a path to keep
 the files.}
 
 \item{logfile}{Filename (within \code{outdir}) for a run log that captures all
-the console output, plus warnings, messages and the error that stopped a
+the console output (which opens with a header giving the h2gam, mgcv and
+R versions and every setting of the run), plus warnings, messages and the error that stopped a
 failed run (each distinct text once, where it first occurred); \code{NULL}
 disables it. Only written when \code{verbose = TRUE} (there is nothing to
 capture otherwise). The sink is unwound on exit, so an error mid-run
