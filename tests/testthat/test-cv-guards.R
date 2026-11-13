@@ -178,6 +178,12 @@ test_that("the result reports the CV gain of the kept set and final-model checks
   expect_equal(res$cv$se, acc$cv_se)
   expect_equal(res$cv$structural - res$cv$selected, res$cv$gain)
   expect_identical(res$cv$folds, 3L)
+  # the per-fold table carries the scores behind those means
+  bf <- res$cv$by_fold
+  expect_identical(bf$fold, 1:3)
+  expect_identical(bf$n, as.vector(table(res$folds)))
+  expect_equal(mean(bf$structural), res$cv$structural)
+  expect_equal(mean(bf$gain), res$cv$gain)
 
   expect_true(is.finite(res$final_check$dispersion))
   p <- res$final_check$resid_ks_p

@@ -876,7 +876,10 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   and `selected` are the mean held-out deviance of the structural-only
 #'   model and of the model with the kept covariates, `gain` and `se` their
 #'   mean paired per-fold difference and its standard error, and `folds` the
-#'   number of folds scored. It uses the search fits on the folds the
+#'   number of folds scored. `by_fold` is a data frame with the same three
+#'   scores for each fold and its number of held-out rows (`NA` where a fold
+#'   could not be scored); check it for a single fold that carries most of
+#'   the gain, which the means hide. It uses the search fits on the folds the
 #'   covariates were selected on, so it is an optimistic guide, not an
 #'   independent test.
 #'
@@ -1143,7 +1146,11 @@ select_covariates_impl <- function(
   ok   <- is.finite(fw$base_dev) & is.finite(kept_dev)
   gain <- (fw$base_dev - kept_dev)[ok]
   cv <- list(structural = mean(fw$base_dev[ok]), selected = mean(kept_dev[ok]),
-             gain = mean(gain), se = stats::sd(gain) / sqrt(length(gain)), folds = sum(ok))
+             gain = mean(gain), se = stats::sd(gain) / sqrt(length(gain)), folds = sum(ok),
+             # per fold, so a single fold carrying the whole gain is visible
+             by_fold = data.frame(fold = sort(unique(folds)), n = as.vector(table(folds)),
+                                  structural = fw$base_dev, selected = kept_dev,
+                                  gain = fw$base_dev - kept_dev))
   # The family table's dispersion / resid_ks_p describe the structural-only
   # model; these are the same two measures on the model actually returned.
   final_check <- list(
@@ -1243,6 +1250,8 @@ select_covariates_impl <- function(
                        "covariates %.4f; gain %.4f (se %.4f)\n"),
                 cv$folds, cv$structural, cv$selected, cv$gain, cv$se))
     cat("  (scored on the folds used for selection: an optimistic guide, not an independent test)\n")
+    cat("  by fold (n = held-out rows):\n")
+    print(format(cv$by_fold, digits = 4), row.names = FALSE)
     cat(sprintf("final model adequacy: dispersion %.3f, residual uniformity p = %s\n",
                 final_check$dispersion,
                 if (is.na(final_check$resid_ks_p)) "NA (needs DHARMa)" else

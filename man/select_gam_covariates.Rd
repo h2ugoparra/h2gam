@@ -158,7 +158,10 @@ the univariate-screen reason (\code{"absent"}, \code{"non-numeric"}, \code{"NA <
 and \code{selected} are the mean held-out deviance of the structural-only
 model and of the model with the kept covariates, \code{gain} and \code{se} their
 mean paired per-fold difference and its standard error, and \code{folds} the
-number of folds scored. It uses the search fits on the folds the
+number of folds scored. \code{by_fold} is a data frame with the same three
+scores for each fold and its number of held-out rows (\code{NA} where a fold
+could not be scored); check it for a single fold that carries most of
+the gain, which the means hide. It uses the search fits on the folds the
 covariates were selected on, so it is an optimistic guide, not an
 independent test.
 
