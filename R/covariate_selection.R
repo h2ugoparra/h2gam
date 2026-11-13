@@ -546,6 +546,18 @@ is_re_smooth <- function(s) {
        any(vapply(s$margin, is_re_smooth, logical(1))))
 }
 
+# Per-fold CV gain of a model over a reference model: the log ratio of their
+# held-out deviances (positive = the model predicts better). A ratio, not a
+# difference, so every fold counts by its proportional improvement: with
+# differences, one badly predicted fold (a block the reference model
+# extrapolates into, say) sets both the mean gain and its standard error, and
+# the 1-SE rule then follows that fold alone. NA where it cannot be computed.
+fold_gain <- function(ref_dev, dev) {
+  g <- log(ref_dev / dev)
+  g[!is.finite(g)] <- NA_real_
+  g
+}
+
 forward_select <- function(data, response, candidates, structural, family_gen,
                            folds, knots, concurvity_max = 0.8, offset = NULL,
                            verbose = TRUE) {
@@ -614,7 +626,7 @@ forward_select <- function(data, response, candidates, structural, family_gen,
     scored <- lapply(remaining, function(v) {
       cd   <- fold_dev(c(accepted, v))
       if (sum(is.finite(cd)) < length(cd) / 2) low_folds <<- union(low_folds, v)
-      diff <- cur_dev - cd                 # paired per-fold improvement
+      diff <- fold_gain(cur_dev, cd)       # paired per-fold improvement
       list(v = v, cd = cd,
            mean = mean(diff, na.rm = TRUE),
            se   = stats::sd(diff, na.rm = TRUE) / sqrt(sum(is.finite(diff))))
@@ -685,8 +697,8 @@ forward_select <- function(data, response, candidates, structural, family_gen,
 # ---------------------------------------------------------------------------
 
 # Re-tests each accepted covariate against the others with the forward
-# criterion: the held-out deviance lost by removing it (paired per fold) must
-# be positive and at least one standard error. A covariate accepted early can
+# criterion: the CV gain of the set with it over the set without it (see
+# fold_gain) must be positive and at least one standard error. A covariate accepted early can
 # lose its place once later ones are in. The weakest failing covariate is
 # dropped and the rest re-tested. `fw` is the forward_select() result.
 backward_recheck <- function(fw, verbose = TRUE) {
@@ -699,7 +711,7 @@ backward_recheck <- function(fw, verbose = TRUE) {
   repeat {
     scored <- lapply(setdiff(kept, skip), function(v) {
       dd   <- fw$fold_dev(setdiff(kept, v))
-      diff <- dd - cur_dev
+      diff <- fold_gain(dd, cur_dev)
       list(v = v, dd = dd, mean = mean(diff, na.rm = TRUE),
            se = stats::sd(diff, na.rm = TRUE) / sqrt(sum(is.finite(diff))))
     })
@@ -857,16 +869,20 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
 #'   The `decision` table has one row per candidate. `cv_gain` and `cv_se`
-#'   are the mean paired per-fold drop in held-out deviance from adding the
-#'   candidate, and its standard error, at the step that decided its fate:
+#'   are the CV gain from adding the candidate and its standard error. The
+#'   gain is the mean over folds of the log ratio of held-out deviance
+#'   without the candidate to held-out deviance with it, so each fold counts
+#'   by its proportional improvement and a single badly predicted fold cannot
+#'   set the scale; `1 - exp(-cv_gain)` is the typical proportional fall in
+#'   a fold's deviance. They are taken at the step that decided its fate:
 #'   the step it was accepted or rejected for concurvity, the backward
 #'   re-check that dropped it, otherwise the last step it was scored.
 #'   `reason` is one of `"selected"`; `"concurvity"`;
 #'   `"concurvity check failed"` (concurvity could not be computed, so the
 #'   candidate was rejected; a warning names it);
 #'   `"backward-CV"` (accepted, but with the later covariates in the model
-#'   removing it no longer cost at least one standard error of held-out
-#'   deviance); `"no CV improvement"` (gain <= 0); `"CV gain below 1
+#'   its CV gain over the set without it was no longer at least one standard
+#'   error); `"no CV improvement"` (gain <= 0); `"CV gain below 1
 #'   SE"` (positive gain smaller than its standard error); `"CV scoring
 #'   failed"` (the fits or held-out predictions failed on too many folds); or
 #'   the univariate-screen reason (`"absent"`, `"non-numeric"`, `"NA <n>%"`,
@@ -874,12 +890,13 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'
 #'   `cv` summarises what the kept covariates buy out of fold: `structural`
 #'   and `selected` are the mean held-out deviance of the structural-only
-#'   model and of the model with the kept covariates, `gain` and `se` their
-#'   mean paired per-fold difference and its standard error, and `folds` the
+#'   model and of the model with the kept covariates, `gain` and `se` the CV
+#'   gain of the second over the first (mean per-fold log deviance ratio, as
+#'   `cv_gain` above) and its standard error, and `folds` the
 #'   number of folds scored. `by_fold` is a data frame with the same three
 #'   scores for each fold and its number of held-out rows (`NA` where a fold
-#'   could not be scored); check it for a single fold that carries most of
-#'   the gain, which the means hide. It uses the search fits on the folds the
+#'   could not be scored); check it for a fold either model predicts far
+#'   worse than the others, which the means hide. It uses the search fits on the folds the
 #'   covariates were selected on, so it is an optimistic guide, not an
 #'   independent test.
 #'
@@ -1143,14 +1160,15 @@ select_covariates_impl <- function(
   # the search fits and folds. The covariates were chosen on these folds, so
   # this is an optimistic guide, not an independent test.
   kept_dev <- bw$dev
-  ok   <- is.finite(fw$base_dev) & is.finite(kept_dev)
-  gain <- (fw$base_dev - kept_dev)[ok]
+  by_fold <- data.frame(fold = sort(unique(folds)), n = as.vector(table(folds)),
+                        structural = fw$base_dev, selected = kept_dev,
+                        gain = fold_gain(fw$base_dev, kept_dev))
+  ok   <- is.finite(by_fold$gain)
+  gain <- by_fold$gain[ok]
   cv <- list(structural = mean(fw$base_dev[ok]), selected = mean(kept_dev[ok]),
              gain = mean(gain), se = stats::sd(gain) / sqrt(length(gain)), folds = sum(ok),
-             # per fold, so a single fold carrying the whole gain is visible
-             by_fold = data.frame(fold = sort(unique(folds)), n = as.vector(table(folds)),
-                                  structural = fw$base_dev, selected = kept_dev,
-                                  gain = fw$base_dev - kept_dev))
+             # per fold, so a fold the models predict very differently is visible
+             by_fold = by_fold)
   # The family table's dispersion / resid_ks_p describe the structural-only
   # model; these are the same two measures on the model actually returned.
   final_check <- list(
@@ -1247,8 +1265,10 @@ select_covariates_impl <- function(
     cat("kept:", if (length(kept)) paste(kept, collapse = ", ") else "(none)", "\n")
     cat(sprintf("deviance explained: %.1f%%\n", 100 * dev_expl))
     cat(sprintf(paste0("held-out deviance (mean of %d folds): structural only %.4f, with kept ",
-                       "covariates %.4f; gain %.4f (se %.4f)\n"),
-                cv$folds, cv$structural, cv$selected, cv$gain, cv$se))
+                       "covariates %.4f\n  CV gain (mean log deviance ratio) %.4f (se %.4f): ",
+                       "a typical fold's deviance falls by %.0f%%\n"),
+                cv$folds, cv$structural, cv$selected, cv$gain, cv$se,
+                100 * (1 - exp(-cv$gain))))
     cat("  (scored on the folds used for selection: an optimistic guide, not an independent test)\n")
     cat("  by fold (n = held-out rows):\n")
     print(format(cv$by_fold, digits = 4), row.names = FALSE)

@@ -141,27 +141,32 @@ below), \code{path}
 \code{logfile} (path to the run log, or \code{NULL} if none was written).
 
 The \code{decision} table has one row per candidate. \code{cv_gain} and \code{cv_se}
-are the mean paired per-fold drop in held-out deviance from adding the
-candidate, and its standard error, at the step that decided its fate:
+are the CV gain from adding the candidate and its standard error. The
+gain is the mean over folds of the log ratio of held-out deviance
+without the candidate to held-out deviance with it, so each fold counts
+by its proportional improvement and a single badly predicted fold cannot
+set the scale; \code{1 - exp(-cv_gain)} is the typical proportional fall in
+a fold's deviance. They are taken at the step that decided its fate:
 the step it was accepted or rejected for concurvity, the backward
 re-check that dropped it, otherwise the last step it was scored.
 \code{reason} is one of \code{"selected"}; \code{"concurvity"};
 \code{"concurvity check failed"} (concurvity could not be computed, so the
 candidate was rejected; a warning names it);
 \code{"backward-CV"} (accepted, but with the later covariates in the model
-removing it no longer cost at least one standard error of held-out
-deviance); \code{"no CV improvement"} (gain <= 0); \code{"CV gain below 1 SE"} (positive gain smaller than its standard error); \code{"CV scoring failed"} (the fits or held-out predictions failed on too many folds); or
+its CV gain over the set without it was no longer at least one standard
+error); \code{"no CV improvement"} (gain <= 0); \code{"CV gain below 1 SE"} (positive gain smaller than its standard error); \code{"CV scoring failed"} (the fits or held-out predictions failed on too many folds); or
 the univariate-screen reason (\code{"absent"}, \code{"non-numeric"}, \code{"NA <n>\%"},
 \code{"zero variance"}), for which the CV columns are \code{NA}.
 
 \code{cv} summarises what the kept covariates buy out of fold: \code{structural}
 and \code{selected} are the mean held-out deviance of the structural-only
-model and of the model with the kept covariates, \code{gain} and \code{se} their
-mean paired per-fold difference and its standard error, and \code{folds} the
+model and of the model with the kept covariates, \code{gain} and \code{se} the CV
+gain of the second over the first (mean per-fold log deviance ratio, as
+\code{cv_gain} above) and its standard error, and \code{folds} the
 number of folds scored. \code{by_fold} is a data frame with the same three
 scores for each fold and its number of held-out rows (\code{NA} where a fold
-could not be scored); check it for a single fold that carries most of
-the gain, which the means hide. It uses the search fits on the folds the
+could not be scored); check it for a fold either model predicts far
+worse than the others, which the means hide. It uses the search fits on the folds the
 covariates were selected on, so it is an optimistic guide, not an
 independent test.
 

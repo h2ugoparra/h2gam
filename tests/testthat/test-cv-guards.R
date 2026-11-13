@@ -176,13 +176,13 @@ test_that("the result reports the CV gain of the kept set and final-model checks
   acc <- res$path[res$path$action == "accept", ]
   expect_equal(res$cv$gain, acc$cv_gain)
   expect_equal(res$cv$se, acc$cv_se)
-  expect_equal(res$cv$structural - res$cv$selected, res$cv$gain)
   expect_identical(res$cv$folds, 3L)
   # the per-fold table carries the scores behind those means
   bf <- res$cv$by_fold
   expect_identical(bf$fold, 1:3)
   expect_identical(bf$n, as.vector(table(res$folds)))
   expect_equal(mean(bf$structural), res$cv$structural)
+  expect_equal(bf$gain, log(bf$structural / bf$selected))
   expect_equal(mean(bf$gain), res$cv$gain)
 
   expect_true(is.finite(res$final_check$dispersion))
@@ -249,4 +249,21 @@ test_that("the backward re-check drops a covariate made redundant by a later one
                                fold_dev = function(terms) stop("not called")), verbose = FALSE)
   expect_identical(one$kept, "a")
   expect_null(one$dropped)
+})
+
+test_that("one badly predicted fold does not decide the CV gain", {
+  # the real run that prompted this: fold 4 held 87% of the deviance difference
+  ref <- c(2.712, 5.415, 2.043, 50.091, 1.033)
+  new <- c(1.164, 1.903, 1.495, 9.586, 0.829)
+  d <- ref - new
+  expect_lt(mean(d) / (sd(d) / sqrt(5)), 1.2)       # differences: barely 1 SE
+  g <- fold_gain(ref, new)
+  expect_gt(mean(g) / (sd(g) / sqrt(5)), 3)         # ratios: every fold improves
+
+  # a gain confined to one fold is still only 1 SE, and so still marginal
+  g <- fold_gain(c(1, 1, 1, 50, 1), c(1, 1, 1, 10, 1))
+  expect_equal(mean(g), sd(g) / sqrt(5))
+
+  # unscorable folds are NA, not Inf or NaN
+  expect_identical(fold_gain(c(1, 0, NA, 1), c(0, 0, 1, 1)), c(NA, NA, NA, 0))
 })

@@ -39,8 +39,8 @@ Documentation is roxygen2 (markdown enabled): edit the `#'` blocks in `R/`, neve
 
 1. **Family suggestion** (`profile_response` → `family_candidates` → `suggest_family`): profiles the response, fits each candidate family on the structural-only model, ranks by AIC alone. Dispersion / DHARMa columns are reported, never scored. Candidates within a branch must share a likelihood type on the same response (all probabilities or all densities) — that is why Tweedie is not offered for counts or for squeezed 0/1 proportions.
 2. **CV folds**: `make_spatial_folds()` (SPCV — a faithful R port of the Python h2ml `SPCVSplitter`: AHC blocks then an HBGF cluster ensemble with spectral clustering) or `make_stratified_folds()` for rare-event responses. Both are exported.
-3. **Forward selection** (`forward_select`): scored by paired per-fold held-out deviance with a 1-SE rule and a concurvity gate against already-accepted smooths (structural terms excluded from the gate).
-4. **Backward re-check** (`backward_recheck`: the forward rule again — removing an accepted covariate must cost at least 1 SE of paired held-out deviance, on the same folds) and a **final `select = TRUE` shrinkage fit**, plus a decision table CSV and diagnostic PNGs written to `outdir`.
+3. **Forward selection** (`forward_select`): scored by the paired per-fold log ratio of held-out deviances (`fold_gain`; a ratio, not a difference, so one badly predicted fold cannot set the mean and the standard error) with a 1-SE rule and a concurvity gate against already-accepted smooths (structural terms excluded from the gate).
+4. **Backward re-check** (`backward_recheck`: the forward rule again — removing an accepted covariate must cost at least 1 SE of that same gain, on the same folds) and a **final `select = TRUE` shrinkage fit**, plus a decision table CSV and diagnostic PNGs written to `outdir`.
 
 Non-obvious invariants to preserve when editing:
 

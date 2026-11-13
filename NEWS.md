@@ -2,10 +2,22 @@
 
 ## Breaking changes
 
+* The CV gain behind every decision is now the mean per-fold log ratio of
+  held-out deviances (reference model over candidate model) instead of
+  their mean difference. With differences, one badly predicted fold (a
+  spatial block the structural-only model extrapolates into, for example)
+  set both the mean gain and its standard error, so the 1-SE rule followed
+  that fold alone: covariates that repaired it passed with a gain just
+  above one standard error, and a covariate with a small consistent gain in
+  every fold could fail. With ratios each fold counts by its proportional
+  improvement. Selections may change, most where fold deviances differ
+  widely. `cv_gain` / `cv_se` in the decision table and path, and `gain` /
+  `se` in `cv`, are on the new scale; `1 - exp(-gain)` is the typical
+  proportional fall in a fold's deviance.
 * The backward re-check now uses the criterion of the forward search
   instead of BIC. An accepted covariate stays only if removing it from the
-  accepted set costs held-out deviance by at least one standard error
-  (paired per fold, same folds). BIC was computed on in-sample fits with
+  accepted set costs at least one standard error of CV gain (paired per
+  fold, same folds). BIC was computed on in-sample fits with
   the family shape held fixed, so a covariate could be accepted for its
   cross-validated skill and then dropped by an unrelated in-sample
   criterion. Selections may change where the backward step used to drop a
@@ -34,16 +46,16 @@
   logged.
 * The result's `cv` gains `by_fold`, also printed in the result section: the
   held-out deviance of the structural-only model and of the kept set, and
-  their difference, for each fold with its number of held-out rows. The
-  means alone hide a single fold that carries most of the gain, which is
-  also what a gain close to one standard error at every step points to.
+  the CV gain between them, for each fold with its number of held-out rows.
+  The means alone hide a fold that either model predicts far worse than
+  the others.
 * The result gains `final_check`: the Pearson dispersion and the DHARMa
   residual-uniformity p-value of the final model. Until now both were only
   reported for the structural-only model in the family table, before any
   covariate was in, and re-checking them on the final fit was left to you.
 * The result gains `cv`: the mean held-out deviance of the structural-only
-  model and of the model with the kept covariates, and their paired gain
-  with its standard error. It is scored on the folds used for selection,
+  model and of the model with the kept covariates, and the CV gain of one
+  over the other with its standard error. It is scored on the folds used for selection,
   so it is an optimistic guide rather than an independent test. Both are
   printed in the result section of the log.
 * Verbose output, and so the run log, now opens with a header giving the
