@@ -1,4 +1,4 @@
-# h2gam (development version)
+# h2gam 0.4.0
 
 ## Breaking changes
 
@@ -59,7 +59,7 @@
   so it is an optimistic guide rather than an independent test. Both are
   printed in the result section of the log.
 * Verbose output, and so the run log, now opens with a header giving the
-  h2gam, mgcv and R versions, the time, and every setting of the run
+  h2gam, mgcv and R versions, the time, and the model and CV settings of the run
   (response, candidates, structural terms, family, thresholds, CV setup). A
   log now shows which code and thresholds produced it.
 * The decision table gains `cv_gain` and `cv_se` columns (placed after
@@ -111,7 +111,7 @@
   rejected with a warning naming it, and its decision-table reason is
   `"concurvity check failed"`.
 * Random-effect structural terms are now recognised in every form, not only
-  `s(var, bs='re')`: random slopes (`s(vessel, sst, bs='re')`), `by =`
+  `s(var, bs='re')`: random slopes (`s(group, x1, bs='re')`), `by =`
   variables, factor-smooth interactions (`bs='fs'`) and tensor terms with an
   `'re'` margin are all excluded from held-out CV prediction. Previously
   these stayed in the prediction (or were excluded under the wrong label),

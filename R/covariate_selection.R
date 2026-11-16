@@ -49,10 +49,10 @@ family_candidates <- function(p) {
   if (p$binary) {
     # ---- presence/absence ----
     # logit is the conventional default, but cloglog is the mechanistically
-    # consistent link for effort-offset longline data: with offset(log(nhooks)),
-    #   cloglog(p) = log(nhooks) + f  <=>  p = 1 - exp(-nhooks * exp(f)),
-    # i.e. the probability of >=1 catch under a Poisson encounter rate ~ hooks
-    # (the presence analogue of the log-link count model). probit is included as
+    # consistent link when there is an exposure offset: with offset(log(exposure)),
+    #   cloglog(p) = log(exposure) + f  <=>  p = 1 - exp(-exposure * exp(f)),
+    # i.e. the probability of >=1 event under a Poisson rate proportional to
+    # the exposure (the presence analogue of the log-link count model). probit is included as
     # a cheap symmetric alternative. AIC is comparable across links here (same
     # response and likelihood), and AIC alone is what picks among them.
     add("binomial_logit",   function() binomial(link = "logit"))
@@ -127,8 +127,8 @@ suggest_family <- function(data, response, structural, knots, offset = NULL) {
   fits  <- list()
 
   # Rank families on the SAME offset model the pipeline deploys. This matters for
-  # the binomial cloglog candidate (its log(nhooks) offset is what gives it the
-  # "P(>=1 catch)" meaning) and keeps AIC comparable to the search/final fits.
+  # the binomial cloglog candidate (its log(exposure) offset is what gives it the
+  # "P(>=1 event)" meaning) and keeps AIC comparable to the search/final fits.
   off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
 
   for (nm in names(cands)) {
@@ -206,9 +206,9 @@ make_select_gen <- function(free_gen, fit) {
 }
 
 # ---------------------------------------------------------------------------
-# 2. Spatial-block folds -- SPCV (mirrors h2ml.features.spatial_cv.SPCVSplitter)
+# 2. Spatial-block folds -- SPCV
 # ---------------------------------------------------------------------------
-# Two-stage spatial CV (Wang et al. 2023), faithful R port of the h2ml method:
+# Two-stage spatial CV (Wang et al. 2023):
 #   Stage 1  AHC blocks: agglomerative hierarchical clustering on coordinates
 #            (euclidean, or haversine for lat/lon degrees) cut at a distance
 #            threshold (default = 10th percentile of pairwise distances).
@@ -262,8 +262,7 @@ make_select_gen <- function(free_gen, fit) {
 
 #' Spatial-block cross-validation folds (SPCV)
 #'
-#' Two-stage spatial CV (Wang et al. 2023), a faithful R port of the h2ml
-#' `SPCVSplitter`. Stage 1 builds spatially coherent blocks by agglomerative
+#' Two-stage spatial CV (Wang et al. 2023). Stage 1 builds spatially coherent blocks by agglomerative
 #' hierarchical clustering on the coordinates, cut at a distance threshold.
 #' Stage 2 groups the blocks into `k` folds by a cluster ensemble (HBGF):
 #' per-block means of location, covariates, and response are each k-means
@@ -766,7 +765,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' Random-effect structural terms are excluded from held-out CV prediction,
 #' matching a deployment `predict(..., exclude = ...)`. That covers every
 #' `bs = "re"` form (random intercepts, random slopes such as
-#' `s(vessel, sst, bs = "re")`, `by =` variables), factor-smooth interactions
+#' `s(group, x1, bs = "re")`, `by =` variables), factor-smooth interactions
 #' (`bs = "fs"`), and tensor terms with an `"re"` margin. Each needs a factor
 #' grouping variable.
 #'
@@ -843,7 +842,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
 #'   instead of collapsing months 1 and 12 onto the same knot. `NULL` lets
 #'   mgcv place knots automatically; entries for absent variables are ignored.
-#' @param offset Name of an effort column; adds `offset(log(<offset>))` to
+#' @param offset Name of an exposure column (must be positive); adds `offset(log(<offset>))` to
 #'   every fit (including family suggestion, so AIC stays comparable).
 #' @param outdir Directory for the decision-table CSV, diagnostic PNGs, and the
 #'   run log (created if absent). Defaults to the session's temporary
@@ -851,7 +850,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the files.
 #' @param logfile Filename (within `outdir`) for a run log that captures all
 #'   the console output (which opens with a header giving the h2gam, mgcv and
-#'   R versions and every setting of the run), plus warnings, messages and the error that stopped a
+#'   R versions and the model and CV settings of the run), plus warnings, messages and the error that stopped a
 #'   failed run (each distinct text once, where it first occurred); `NULL`
 #'   disables it. Only written when `verbose = TRUE` (there is nothing to
 #'   capture otherwise). The sink is unwound on exit, so an error mid-run
@@ -861,10 +860,13 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the final model summary.
 #'
 #' @return (Invisibly) a list: `model` (the final mgcv gam), `kept` (selected
-#'   covariate names), `family` (chosen family label), `decision` (per-candidate
+#'   covariate names), `family` (chosen family label; `"user"` when a family
+#'   was supplied), `decision` (per-candidate
 #'   decision table, also written to `covariate_decision_table.csv`; see
 #'   below), `path`
-#'   (forward-selection steps), `formula` (final formula as a string),
+#'   (forward-selection steps: one row per acceptance or concurvity rejection,
+#'   with `step`, `var`, `action`, `concurvity`, `cv_gain` and `cv_se`; `NULL`
+#'   when there were none), `formula` (final formula as a string),
 #'   `dev_expl` (deviance explained), `cv` and `final_check` (see below), `folds` (integer fold vector, one per row used in the search), and
 #'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
@@ -976,8 +978,7 @@ select_gam_covariates <- function(
     # the console by the split sink, on top of R's own report of the
     # condition. `con` is in append mode, so its later writes land after this.
     flush(con)
-    cat(txt, "
-", sep = "", file = path, append = TRUE)
+    cat(txt, "\n", sep = "", file = path, append = TRUE)
   }
   invisible(withCallingHandlers(run(), warning = note("Warning: "),
                                 message = note(""), error = note("Error: ")))
@@ -988,7 +989,7 @@ select_covariates_impl <- function(
     spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
     cv_linkage, knots, offset, outdir, logfile, seed, verbose) {
 
-  # Run header, before anything can fail: the versions and every setting, so
+  # Run header, before anything can fail: the versions and the settings, so
   # a log shows which code and thresholds produced it.
   if (verbose) {
     show <- function(x) if (is.null(x)) "NULL" else paste(as.character(x), collapse = ", ")

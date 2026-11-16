@@ -17,7 +17,7 @@ Every threshold is an overridable argument. The defaults for `structural` and `c
 remotes::install_github("h2ugoparra/h2gam")
 ```
 
-Pin a release for reproducibility, e.g. `remotes::install_github("h2ugoparra/h2gam@v0.3.0")`. The development version is on the `dev` branch: `remotes::install_github("h2ugoparra/h2gam@dev")`. Its version number ends in `.9000`, and `NEWS.md` lists what has changed since the last release.
+Pin a release for reproducibility, e.g. `remotes::install_github("h2ugoparra/h2gam@v0.4.0")`. The development version is on the `dev` branch: `remotes::install_github("h2ugoparra/h2gam@dev")`. Its version number ends in `.9000`, and `NEWS.md` lists what has changed since the last release.
 
 ## Usage
 
@@ -29,9 +29,9 @@ df$year <- factor(df$year)   # random-effect terms (bs = 're') need a factor
 res <- select_gam_covariates(
   data       = df,
   response   = "my_target",
-  candidates = c("sst", "chl", "mld", ...),
+  candidates = c("x1", "x2", "x3", ...),
   structural = c("s(year, bs='re')", "te(lon, lat)"),
-  offset     = "nhooks",
+  offset     = "exposure",
   cv_k       = 5,
   outdir     = "output/my_target"
 )
@@ -51,7 +51,7 @@ Each project keeps its own short driver script (data loading, preprocessing, tar
 ## Dependencies
 
 Required: `mgcv` (attached with the package).
-Optional (feature-gated via `Suggests`): `DHARMa` (residual diagnostics in family suggestion), `sf` (only when reprojecting lon/lat for the `euclidean` spatial-CV metric, i.e. when you pass `cv_crs`). The default `haversine` metric, and `euclidean` on already-projected coordinates, need neither.
+Optional (feature-gated via `Suggests`): `DHARMa` (the residual-uniformity p-value in the family table and in `final_check`; `NA` without it), `sf` (only when reprojecting lon/lat for the `euclidean` spatial-CV metric, i.e. when you pass `cv_crs`). The default `haversine` metric, and `euclidean` on already-projected coordinates, need neither.
 
 ## Outputs
 

@@ -4,14 +4,14 @@
 sim_counts <- function(n = 300, seed = 11) {
   set.seed(seed)
   df <- data.frame(lon = runif(n, -20, -5), lat = runif(n, 35, 50),
-                   sst = rnorm(n), noise = rnorm(n),
-                   year = sample(2000:2009, n, TRUE), eff = runif(n, 50, 150))
-  df$catch <- rnbinom(n, mu = exp(1 + 0.8 * sin(2 * df$sst)) * df$eff / 100, size = 3)
+                   x1 = rnorm(n), noise = rnorm(n),
+                   year = sample(2000:2009, n, TRUE), exposure = runif(n, 50, 150))
+  df$count <- rnbinom(n, mu = exp(1 + 0.8 * sin(2 * df$x1)) * df$exposure / 100, size = 3)
   df
 }
 
 run <- function(df, ...) {
-  select_gam_covariates(df, "catch", c("sst", "noise"), cv_k = 3,
+  select_gam_covariates(df, "count", c("x1", "noise"), cv_k = 3,
                         cv_scheme = "stratified", outdir = tempdir(),
                         logfile = NULL, verbose = FALSE, ...)
 }
@@ -19,16 +19,16 @@ run <- function(df, ...) {
 test_that("NA offset rows are dropped instead of voiding the CV folds", {
   skip_on_cran()
   df <- sim_counts()
-  df$eff[1:20] <- NA
-  res <- run(df, structural = "te(lon, lat)", offset = "eff")
-  expect_true("sst" %in% res$kept)
+  df$exposure[1:20] <- NA
+  res <- run(df, structural = "te(lon, lat)", offset = "exposure")
+  expect_true("x1" %in% res$kept)
   expect_equal(nrow(res$model$model), nrow(df) - 20)
 })
 
 test_that("non-positive offset values are rejected", {
   df <- sim_counts()
-  df$eff[1] <- 0
-  expect_error(run(df, structural = "te(lon, lat)", offset = "eff"), "must be > 0")
+  df$exposure[1] <- 0
+  expect_error(run(df, structural = "te(lon, lat)", offset = "exposure"), "must be > 0")
 })
 
 test_that("a numeric random-effect variable is rejected up front", {
@@ -42,7 +42,7 @@ test_that("a factor random-effect variable still selects the real driver", {
   df <- sim_counts()
   df$year <- factor(df$year)
   res <- run(df, structural = c("s(year, bs='re')", "te(lon, lat)"))
-  expect_true("sst" %in% res$kept)
+  expect_true("x1" %in% res$kept)
 })
 
 test_that("every random-effect form is excluded from held-out prediction", {
@@ -52,15 +52,15 @@ test_that("every random-effect form is excluded from held-out prediction", {
   expect_false(is_re_smooth(s(x)))
   expect_false(is_re_smooth(1))
 
-  # A strong per-vessel effect with one vessel per fold: held-out vessels are
+  # A strong per-group effect with one group per fold: held-out groups are
   # unseen, so a term left in the prediction costs the fold or its accuracy.
   df <- sim_counts(n = 240)
-  df$vessel <- factor(rep(letters[1:6], each = 40))
-  df$catch  <- rpois(240, exp(1 + 0.8 * sin(2 * df$sst) + rep(rnorm(6), each = 40)))
+  df$group <- factor(rep(letters[1:6], each = 40))
+  df$count  <- rpois(240, exp(1 + 0.8 * sin(2 * df$x1) + rep(rnorm(6), each = 40)))
   folds <- rep(rep(1:3, each = 40), 2)
-  for (term in c("s(vessel, bs='re')", "s(vessel, sst, bs='re')",
-                 "s(vessel, bs='re', by=eff)", "s(lat, vessel, bs='fs', k=4)")) {
-    fw <- forward_select(df, "catch", "sst", c("te(lon, lat, k=4)", term),
+  for (term in c("s(group, bs='re')", "s(group, x1, bs='re')",
+                 "s(group, bs='re', by=exposure)", "s(lat, group, bs='fs', k=4)")) {
+    fw <- forward_select(df, "count", "x1", c("te(lon, lat, k=4)", term),
                          family_gen = function() poisson(), folds = folds,
                          knots = NULL, verbose = FALSE)
     expect_true(is.finite(fw$scores$cv_gain), info = term)
@@ -69,34 +69,34 @@ test_that("every random-effect form is excluded from held-out prediction", {
 
 test_that("a random-effect term with no factor is rejected whatever its form", {
   df <- sim_counts()
-  expect_error(run(df, structural = "s(sst, year, bs='re')"),
-               "needs 'sst' or 'year' to be a factor")
+  expect_error(run(df, structural = "s(x1, year, bs='re')"),
+               "needs 'x1' or 'year' to be a factor")
   expect_error(run(df, structural = "s(lat, nope, bs='fs')"), "column 'nope' not found")
 })
 
 test_that("decision-table na_frac reflects the data as supplied", {
   skip_on_cran()
   df <- sim_counts()
-  df$sst[1:30] <- NA
+  df$x1[1:30] <- NA
   res <- run(df, structural = "te(lon, lat)")
-  expect_equal(res$decision$na_frac[res$decision$covariate == "sst"], 30 / nrow(df))
+  expect_equal(res$decision$na_frac[res$decision$covariate == "x1"], 30 / nrow(df))
 })
 
 test_that("the decision table carries the CV score and reason behind each decision", {
   skip_on_cran()
   df <- sim_counts()
   df$const <- 1
-  res <- select_gam_covariates(df, "catch", c("sst", "noise", "const"), cv_k = 3,
+  res <- select_gam_covariates(df, "count", c("x1", "noise", "const"), cv_k = 3,
                                structural = "te(lon, lat)", cv_scheme = "stratified",
                                outdir = tempdir(), logfile = NULL, verbose = FALSE)
   d <- res$decision
   row <- function(v) d[d$covariate == v, ]
 
   # kept: the score at its entry step
-  acc <- res$path[res$path$var == "sst" & res$path$action == "accept", ]
-  expect_equal(row("sst")$cv_gain, acc$cv_gain)
-  expect_equal(row("sst")$cv_se, acc$cv_se)
-  expect_gt(row("sst")$cv_gain, row("sst")$cv_se)
+  acc <- res$path[res$path$var == "x1" & res$path$action == "accept", ]
+  expect_equal(row("x1")$cv_gain, acc$cv_gain)
+  expect_equal(row("x1")$cv_se, acc$cv_se)
+  expect_gt(row("x1")$cv_gain, row("x1")$cv_se)
 
   # dropped in the search: scored, and the reason agrees with the score
   n <- row("noise")
@@ -115,7 +115,7 @@ test_that("a candidate whose fits fail is reported as a scoring failure", {
   # s(bad) cannot be fitted (non-numeric), so every fold is NA for it
   df$bad <- sample(letters, nrow(df), TRUE)
   fw <- suppressWarnings(
-    forward_select(df, "catch", "bad", "te(lon, lat)", family_gen = function() poisson(),
+    forward_select(df, "count", "bad", "te(lon, lat)", family_gen = function() poisson(),
                    folds = folds, knots = NULL, verbose = FALSE))
   expect_length(fw$accepted, 0)
   expect_identical(fw$scores$var, "bad")
@@ -171,7 +171,7 @@ test_that("a concurvity-rejected candidate is not scored again", {
 test_that("the result reports the CV gain of the kept set and final-model checks", {
   skip_on_cran()
   res <- run(sim_counts(), structural = "te(lon, lat)")
-  expect_identical(res$kept, "sst")
+  expect_identical(res$kept, "x1")
   # one covariate kept: the summary is its accepted step
   acc <- res$path[res$path$action == "accept", ]
   expect_equal(res$cv$gain, acc$cv_gain)
@@ -199,7 +199,7 @@ test_that("a CV fold lost to the reference model is reported", {
     if (nrow(data) == 80) NULL else real_fit(form, data, ...)
   })
   expect_warning(
-    fw <- forward_select(df, "catch", "sst", "te(lon, lat, k=4)",
+    fw <- forward_select(df, "count", "x1", "te(lon, lat, k=4)",
                          family_gen = function() poisson(), folds = folds,
                          knots = NULL, verbose = FALSE),
     "only 2 of 3 CV folds")
@@ -210,7 +210,7 @@ test_that("forward selection fails loudly when the baseline cannot be scored", {
   df <- sim_counts(n = 60)
   folds <- rep_len(1:3, nrow(df))
   expect_error(
-    forward_select(df, "catch", c("sst"), "te(lon, lat)",
+    forward_select(df, "count", c("x1"), "te(lon, lat)",
                    family_gen = function() stop("boom"), folds = folds,
                    knots = NULL, verbose = FALSE),
     "scored on only 0 of 3 CV folds")
