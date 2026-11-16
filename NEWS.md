@@ -9,6 +9,14 @@
   separates folds in time. With your own column you can keep such units
   together or block in space and time. `cv_k`, `cv_scheme` and the other
   `cv_*` arguments are ignored when it is set, and `coords` need not exist.
+* `final_check` gains `resid_moran_i` and `resid_moran_p`, also printed in
+  the result section: Moran's I of the final model's DHARMa residuals over
+  the `coords` locations, and its p-value. The spatial folds guard the
+  selection against spatial autocorrelation, but nothing reported whether
+  the final model still leaves spatial structure in its residuals, in which
+  case its standard errors and p-values are too optimistic. Both are `NA`
+  without DHARMa, without usable `coords` columns, or above 10,000 distinct
+  locations.
 
 # h2gam 0.4.0
 
