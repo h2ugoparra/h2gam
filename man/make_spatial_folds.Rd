@@ -68,8 +68,7 @@ view is compressed by PCA.}
 An integer vector of fold ids (1..k), one per row of \code{data}.
 }
 \description{
-Two-stage spatial CV (Wang et al. 2023), a faithful R port of the h2ml
-\code{SPCVSplitter}. Stage 1 builds spatially coherent blocks by agglomerative
+Two-stage spatial CV (Wang et al. 2023). Stage 1 builds spatially coherent blocks by agglomerative
 hierarchical clustering on the coordinates, cut at a distance threshold.
 Stage 2 groups the blocks into \code{k} folds by a cluster ensemble (HBGF):
 per-block means of location, covariates, and response are each k-means

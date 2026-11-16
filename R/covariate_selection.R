@@ -206,9 +206,9 @@ make_select_gen <- function(free_gen, fit) {
 }
 
 # ---------------------------------------------------------------------------
-# 2. Spatial-block folds -- SPCV (mirrors h2ml.features.spatial_cv.SPCVSplitter)
+# 2. Spatial-block folds -- SPCV
 # ---------------------------------------------------------------------------
-# Two-stage spatial CV (Wang et al. 2023), faithful R port of the h2ml method:
+# Two-stage spatial CV (Wang et al. 2023):
 #   Stage 1  AHC blocks: agglomerative hierarchical clustering on coordinates
 #            (euclidean, or haversine for lat/lon degrees) cut at a distance
 #            threshold (default = 10th percentile of pairwise distances).
@@ -262,8 +262,7 @@ make_select_gen <- function(free_gen, fit) {
 
 #' Spatial-block cross-validation folds (SPCV)
 #'
-#' Two-stage spatial CV (Wang et al. 2023), a faithful R port of the h2ml
-#' `SPCVSplitter`. Stage 1 builds spatially coherent blocks by agglomerative
+#' Two-stage spatial CV (Wang et al. 2023). Stage 1 builds spatially coherent blocks by agglomerative
 #' hierarchical clustering on the coordinates, cut at a distance threshold.
 #' Stage 2 groups the blocks into `k` folds by a cluster ensemble (HBGF):
 #' per-block means of location, covariates, and response are each k-means
