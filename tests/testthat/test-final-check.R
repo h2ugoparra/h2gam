@@ -54,3 +54,34 @@ test_that("the Moran test is NA when it cannot be run", {
   expect_true(is.na(fc$resid_moran_i) && is.na(fc$resid_moran_p))
   expect_identical(dharma_moran(NULL, 1:5, 1:5), list(i = NA_real_, p = NA_real_))
 })
+
+test_that("the residual map and its data are produced, one row per location", {
+  skip_on_cran()
+  df <- sim_field(n = 150)
+  df$lon <- round(df$lon); df$lat <- round(df$lat)       # repeated locations
+  out <- file.path(tempdir(), "resid-map")
+  res <- select_gam_covariates(df, "y", "x1", structural = character(), cv_k = 3,
+                               cv_scheme = "stratified", outdir = out, logfile = NULL,
+                               verbose = FALSE)
+  rm <- res$resid_map
+  expect_named(rm, c("lon", "lat", "n", "resid"))
+  expect_identical(nrow(rm), nrow(unique(df[c("lon", "lat")])))
+  expect_identical(sum(rm$n), nrow(df))
+  # n counts the rows at each location
+  one <- rm[1, ]
+  expect_identical(one$n, sum(df$lon == one$lon & df$lat == one$lat))
+  expect_true(all(is.finite(rm$resid)))
+  expect_true(attr(rm, "type") %in% c("DHARMa scaled", "deviance"))
+  if (attr(rm, "type") == "DHARMa scaled") expect_true(all(rm$resid >= 0 & rm$resid <= 1))
+  expect_gt(file.size(file.path(out, "residual_map.png")), 0)
+})
+
+test_that("without coordinates there is no residual map", {
+  skip_on_cran()
+  out <- file.path(tempdir(), "resid-map-none")
+  res <- select_gam_covariates(sim_field(n = 120), "y", "x1", structural = character(),
+                               cv_k = 3, cv_scheme = "stratified", coords = c("absent", "absent2"),
+                               outdir = out, logfile = NULL, verbose = FALSE)
+  expect_null(res$resid_map)
+  expect_false(file.exists(file.path(out, "residual_map.png")))
+})
