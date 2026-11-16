@@ -1,4 +1,4 @@
-# h2gam (development version)
+# h2gam 0.4.0
 
 ## Breaking changes
 

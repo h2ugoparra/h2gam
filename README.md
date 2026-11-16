@@ -17,7 +17,7 @@ Every threshold is an overridable argument. The defaults for `structural` and `c
 remotes::install_github("h2ugoparra/h2gam")
 ```
 
-Pin a release for reproducibility, e.g. `remotes::install_github("h2ugoparra/h2gam@v0.3.0")`. The development version is on the `dev` branch: `remotes::install_github("h2ugoparra/h2gam@dev")`. Its version number ends in `.9000`, and `NEWS.md` lists what has changed since the last release.
+Pin a release for reproducibility, e.g. `remotes::install_github("h2ugoparra/h2gam@v0.4.0")`. The development version is on the `dev` branch: `remotes::install_github("h2ugoparra/h2gam@dev")`. Its version number ends in `.9000`, and `NEWS.md` lists what has changed since the last release.
 
 ## Usage
 
