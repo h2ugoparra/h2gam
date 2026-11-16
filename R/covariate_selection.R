@@ -818,8 +818,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   log lists the rows each candidate costs, and a warning names them when
 #'   together they cost more than 10% of the rows. The final model is refitted
 #'   on all rows complete for the kept covariates.
-#' @param cv_k Number of CV folds.
-#' @param cv_scheme Fold construction: `"spatial"` (SPCV, the default; see
+#' @param cv_k Number of CV folds. Ignored when `cv_folds` is given.
+#' @param cv_scheme Fold construction when `cv_folds` is not given: `"spatial"` (SPCV, the default; see
 #'   [make_spatial_folds()]) or `"stratified"` (non-spatial k-fold stratified
 #'   on the response; see [make_stratified_folds()]). Use `"stratified"` for
 #'   low-prevalence (e.g. binomial presence/absence) targets where spatial
@@ -837,6 +837,14 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   pairwise distances).
 #' @param cv_linkage SPCV AHC linkage (`"ward.D2"` default; Ward variants are
 #'   downgraded to `"average"` for haversine). See [make_spatial_folds()].
+#' @param cv_folds Name of a column of `data` holding your own fold ids, one
+#'   fold per distinct value; `NULL` (default) builds the folds from
+#'   `cv_scheme`. Use it to keep rows of one sampling unit (repeated measurements of a site, say)
+#'   in the same fold, or to block in space and time: the built-in folds do
+#'   neither. When given, `cv_k`, `cv_scheme` and the other `cv_*` arguments
+#'   are ignored and the `coords` columns need not exist. The column must
+#'   have no missing values. In the result, folds are numbered in the sorted
+#'   order of its values.
 #' @param knots mgcv per-smooth knot positions, passed to every `gam()`/`bam()`
 #'   fit. Mainly the cyclic boundary for `s(month, bs='cc')`: pass
 #'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
@@ -945,6 +953,7 @@ select_gam_covariates <- function(
     cv_crs         = NULL,
     cv_threshold   = NULL,
     cv_linkage     = "ward.D2",
+    cv_folds       = NULL,
     knots          = NULL,
     offset         = NULL,
     outdir         = tempdir(),
@@ -955,7 +964,7 @@ select_gam_covariates <- function(
   run <- function() select_covariates_impl(
     data, response, candidates, structural, coords, family, concurvity_max,
     spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
-    cv_linkage, knots, offset, outdir, logfile, seed, verbose)
+    cv_linkage, cv_folds, knots, offset, outdir, logfile, seed, verbose)
   # All progress output is verbose-gated: nothing to log unless verbose.
   if (is.null(logfile) || !isTRUE(verbose)) return(invisible(run()))
 
@@ -987,7 +996,7 @@ select_gam_covariates <- function(
 select_covariates_impl <- function(
     data, response, candidates, structural, coords, family, concurvity_max,
     spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
-    cv_linkage, knots, offset, outdir, logfile, seed, verbose) {
+    cv_linkage, cv_folds, knots, offset, outdir, logfile, seed, verbose) {
 
   # Run header, before anything can fail: the versions and the settings, so
   # a log shows which code and thresholds produced it.
@@ -1007,8 +1016,12 @@ select_covariates_impl <- function(
       paste(sprintf("%s = c(%s)", names(knots), vapply(knots, show, "")), collapse = "; ")))
     cat(sprintf("  concurvity_max = %s | spearman_pre = %s | na_max = %s\n",
                 show(concurvity_max), show(spearman_pre), show(na_max)))
-    cat(sprintf("  cv_k = %s | cv_scheme = %s | seed = %s\n", show(cv_k), show(cv_scheme[1]), show(seed)))
-    if (identical(cv_scheme[1], "spatial"))
+    if (!is.null(cv_folds)) {
+      cat(sprintf("  cv_folds = %s (user-supplied folds)\n", show(cv_folds)))
+    } else {
+      cat(sprintf("  cv_k = %s | cv_scheme = %s | seed = %s\n", show(cv_k), show(cv_scheme[1]), show(seed)))
+    }
+    if (is.null(cv_folds) && identical(cv_scheme[1], "spatial"))
       cat(sprintf("  coords = %s | cv_metric = %s | cv_linkage = %s | cv_threshold = %s | cv_crs = %s\n",
                   show(coords), show(cv_metric), show(cv_linkage), show(cv_threshold), show(cv_crs)))
   }
@@ -1016,7 +1029,13 @@ select_covariates_impl <- function(
   if (!is.data.frame(data)) stop("`data` must be a data.frame.")
   .need_cols(data, response, "response")
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
-  if (cv_scheme == "spatial") {            # fail before the family fits, not after
+  if (!is.null(cv_folds)) {
+    if (!is.character(cv_folds) || length(cv_folds) != 1)
+      stop("`cv_folds` must be the name of one column of `data`.")
+    .need_cols(data, cv_folds, "cv_folds")
+    if (anyNA(data[[cv_folds]]))
+      stop(sprintf("cv_folds column '%s' has missing values.", cv_folds))
+  } else if (cv_scheme == "spatial") {     # fail before the family fits, not after
     if (length(coords) != 2) stop("`coords` must name exactly two columns.")
     .need_cols(data, coords, "coords")
   }
@@ -1127,8 +1146,18 @@ select_covariates_impl <- function(
 
   clusters <- spearman_clusters(data, scr$keep, thr = spearman_pre)
   if (verbose) cat(sprintf("\n== %s folds ==\n",
-                   if (cv_scheme == "stratified") "Stratified k-fold" else "Spatial (SPCV)"))
-  folds    <- if (cv_scheme == "stratified") {
+                   if (!is.null(cv_folds)) "User-supplied" else
+                     if (cv_scheme == "stratified") "Stratified k-fold" else "Spatial (SPCV)"))
+  folds    <- if (!is.null(cv_folds)) {
+    f  <- data[[cv_folds]]
+    id <- match(f, sort(unique(f)))        # 1..k in the sorted order of the values
+    if (max(id) < 2)
+      stop(sprintf("cv_folds column '%s' has fewer than 2 folds among the rows used in the search.",
+                   cv_folds))
+    if (verbose) cat(sprintf("  column '%s': %d folds (sizes %s)\n", cv_folds, max(id),
+                             paste(tabulate(id), collapse = "/")))
+    id
+  } else if (cv_scheme == "stratified") {
     make_stratified_folds(data, response, k = cv_k, seed = seed, verbose = verbose)
   } else {
     make_spatial_folds(data, response, scr$keep, coords = coords, k = cv_k,

@@ -20,6 +20,7 @@ select_gam_covariates(
   cv_crs = NULL,
   cv_threshold = NULL,
   cv_linkage = "ward.D2",
+  cv_folds = NULL,
   knots = NULL,
   offset = NULL,
   outdir = tempdir(),
@@ -79,9 +80,9 @@ log lists the rows each candidate costs, and a warning names them when
 together they cost more than 10\% of the rows. The final model is refitted
 on all rows complete for the kept covariates.}
 
-\item{cv_k}{Number of CV folds.}
+\item{cv_k}{Number of CV folds. Ignored when \code{cv_folds} is given.}
 
-\item{cv_scheme}{Fold construction: \code{"spatial"} (SPCV, the default; see
+\item{cv_scheme}{Fold construction when \code{cv_folds} is not given: \code{"spatial"} (SPCV, the default; see
 \code{\link[=make_spatial_folds]{make_spatial_folds()}}) or \code{"stratified"} (non-spatial k-fold stratified
 on the response; see \code{\link[=make_stratified_folds]{make_stratified_folds()}}). Use \code{"stratified"} for
 low-prevalence (e.g. binomial presence/absence) targets where spatial
@@ -103,6 +104,15 @@ pairwise distances).}
 
 \item{cv_linkage}{SPCV AHC linkage (\code{"ward.D2"} default; Ward variants are
 downgraded to \code{"average"} for haversine). See \code{\link[=make_spatial_folds]{make_spatial_folds()}}.}
+
+\item{cv_folds}{Name of a column of \code{data} holding your own fold ids, one
+fold per distinct value; \code{NULL} (default) builds the folds from
+\code{cv_scheme}. Use it to keep rows of one sampling unit (repeated measurements of a site, say)
+in the same fold, or to block in space and time: the built-in folds do
+neither. When given, \code{cv_k}, \code{cv_scheme} and the other \verb{cv_*} arguments
+are ignored and the \code{coords} columns need not exist. The column must
+have no missing values. In the result, folds are numbered in the sorted
+order of its values.}
 
 \item{knots}{mgcv per-smooth knot positions, passed to every \code{gam()}/\code{bam()}
 fit. Mainly the cyclic boundary for \code{s(month, bs='cc')}: pass
