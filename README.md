@@ -51,7 +51,7 @@ Each project keeps its own short driver script (data loading, preprocessing, tar
 ## Dependencies
 
 Required: `mgcv` (attached with the package).
-Optional (feature-gated via `Suggests`): `DHARMa` (the residual-uniformity p-value in the family table and in `final_check`; `NA` without it), `sf` (only when reprojecting lon/lat for the `euclidean` spatial-CV metric, i.e. when you pass `cv_crs`). The default `haversine` metric, and `euclidean` on already-projected coordinates, need neither.
+Optional (feature-gated via `Suggests`): `DHARMa` (the residual-uniformity p-value in the family table and in `final_check`, and the residual spatial autocorrelation test in `final_check`; `NA` without it), `sf` (only when reprojecting lon/lat for the `euclidean` spatial-CV metric, i.e. when you pass `cv_crs`). The default `haversine` metric, and `euclidean` on already-projected coordinates, need neither.
 
 ## Outputs
 
@@ -62,4 +62,4 @@ Written to `outdir` (by default the session's temporary directory, so set it to 
 - `partial_effects.png` — partial effect plots of the kept smooths
 - `covariate_selection_log.txt` — the run log: console output plus warnings, messages and the error that stopped a failed run (written when `verbose = TRUE`; rename or disable it with `logfile`)
 
-The returned list carries the fitted `mgcv` model, the kept covariate set, the chosen family, the decision table, the selection path, the final formula, deviance explained, the held-out deviance gained by the kept covariates (`cv`), the final model's dispersion and residual-uniformity check (`final_check`), the CV folds, and the path to the run log.
+The returned list carries the fitted `mgcv` model, the kept covariate set, the chosen family, the decision table, the selection path, the final formula, deviance explained, the held-out deviance gained by the kept covariates (`cv`), the final model's dispersion, residual-uniformity check and residual spatial autocorrelation (Moran's I) (`final_check`), the CV folds, and the path to the run log.

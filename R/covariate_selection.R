@@ -103,16 +103,50 @@ sv_squeeze <- function(y) {
   (y * (n - 1) + 0.5) / n
 }
 
-# DHARMa uniformity p-value (NA if the family can't be simulated).
-dharma_ks <- function(m) {
-  if (!requireNamespace("DHARMa", quietly = TRUE)) return(NA_real_)
+# DHARMa simulated residuals (NULL without DHARMa, or if the family can't be
+# simulated).
+dharma_sim <- function(m) {
+  if (!requireNamespace("DHARMa", quietly = TRUE)) return(NULL)
   # suppressMessages: DHARMa message()s an "install mgcViz" notice on every gam
   # simulation when mgcViz is absent, which would break verbose = FALSE.
-  out <- tryCatch(suppressMessages({
-    sim <- DHARMa::simulateResiduals(m, n = 250, plot = FALSE)
-    DHARMa::testUniformity(sim, plot = FALSE)$p.value
-  }), error = function(e) NA_real_)
-  out
+  tryCatch(suppressMessages(DHARMa::simulateResiduals(m, n = 250, plot = FALSE)),
+           error = function(e) NULL)
+}
+
+# DHARMa uniformity p-value (NA when there are no simulated residuals).
+dharma_ks <- function(m, sim = dharma_sim(m)) {
+  if (is.null(sim)) return(NA_real_)
+  tryCatch(suppressMessages(DHARMa::testUniformity(sim, plot = FALSE)$p.value),
+           error = function(e) NA_real_)
+}
+
+# Above this many distinct locations Moran's I is skipped: it needs their full
+# pairwise distance matrix (8 * n^2 bytes, several copies of it inside the test).
+moran_max_locations <- 10000
+
+# Moran's I of the DHARMa residuals over the sample locations (x, y), and its
+# p-value; NA when it cannot be computed. Distances follow the CV metric:
+# great-circle for "haversine", else planar (reprojected when `crs` is given).
+# The test needs distinct locations, so residuals are aggregated by location.
+dharma_moran <- function(sim, x, y, metric = "haversine", crs = NULL) {
+  na <- list(i = NA_real_, p = NA_real_)
+  if (is.null(sim) || is.null(x) || is.null(y) || !all(is.finite(x) & is.finite(y))) return(na)
+  g <- factor(paste(x, y))
+  if (nlevels(g) < 3 || nlevels(g) > moran_max_locations) return(na)
+  tryCatch(suppressMessages({
+    if (nlevels(g) < length(g)) {
+      sim <- DHARMa::recalculateResiduals(sim, group = g)
+      u <- which(!duplicated(g)); u <- u[order(g[u])]   # groups come back in level order
+      x <- x[u]; y <- y[u]
+    }
+    d <- if (metric == "haversine") .haversine_dist(y, x) else {
+      xy <- cbind(x, y)
+      if (!is.null(crs)) xy <- sf::sf_project(from = "+proj=longlat +datum=WGS84", to = crs, pts = xy)
+      as.matrix(stats::dist(xy))
+    }
+    t <- DHARMa::testSpatialAutocorrelation(sim, distMat = d, plot = FALSE)
+    list(i = unname(t$statistic["observed"]), p = t$p.value)
+  }), error = function(e) na)
 }
 
 # Fit each candidate family on the structural-only model, rank by AIC (ok
@@ -786,7 +820,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`. May be
 #'   `character()` for an intercept-only baseline.
 #' @param coords Length-2 character vector naming the longitude and latitude
-#'   columns, used for spatial folds and complete-case filtering.
+#'   columns, used for spatial folds, complete-case filtering, and the
+#'   residual spatial autocorrelation check in `final_check`.
 #' @param family `"auto"` (default) profiles the response and takes the
 #'   lowest-AIC candidate that fits on the structural-only model. Candidates
 #'   are limited to families whose AIC is comparable on the response: Poisson
@@ -913,7 +948,17 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   `final_check` holds `dispersion` (Pearson) and `resid_ks_p` (DHARMa
 #'   residual uniformity; `NA` without DHARMa) for the final model. The
 #'   family table reports the same two measures for the structural-only
-#'   model, before any covariate is in.
+#'   model, before any covariate is in. `resid_moran_i` and `resid_moran_p`
+#'   are Moran's I of those residuals over the `coords` locations and its
+#'   p-value (DHARMa's spatial autocorrelation test, on distances in
+#'   `cv_metric`; residuals of rows sharing a location are aggregated). A
+#'   positive I with a small p-value means the final model leaves spatial
+#'   structure unexplained, so its standard errors and p-values are too
+#'   optimistic; the cross-validated selection does not depend on them. With
+#'   many locations even a negligible I is significant, so read the size of I
+#'   as well. Both are `NA` without DHARMa, when the `coords` columns are
+#'   absent or have missing values in the final-fit rows, or above 10,000
+#'   distinct locations (the test needs their full distance matrix).
 #'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
 #'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`,
@@ -1201,9 +1246,16 @@ select_covariates_impl <- function(
              by_fold = by_fold)
   # The family table's dispersion / resid_ks_p describe the structural-only
   # model; these are the same two measures on the model actually returned.
+  # Moran's I asks what neither of them does: whether the residuals are still
+  # spatially autocorrelated once the structural terms and covariates are in.
+  sim   <- dharma_sim(model)
+  moran <- if (length(coords) == 2 && all(coords %in% names(final_data)))
+    dharma_moran(sim, final_data[[coords[1]]], final_data[[coords[2]]], cv_metric, cv_crs) else
+    dharma_moran(NULL)
   final_check <- list(
     dispersion = sum(residuals(model, type = "pearson")^2) / model$df.residual,
-    resid_ks_p = dharma_ks(model))
+    resid_ks_p = dharma_ks(model, sim),
+    resid_moran_i = moran$i, resid_moran_p = moran$p)
 
   # -- decision table ------------------------------------------------------
   edf <- {
@@ -1306,6 +1358,10 @@ select_covariates_impl <- function(
                 final_check$dispersion,
                 if (is.na(final_check$resid_ks_p)) "NA (needs DHARMa)" else
                   format.pval(final_check$resid_ks_p, digits = 3)))
+    cat(sprintf("residual spatial autocorrelation: %s\n",
+                if (is.na(final_check$resid_moran_p)) "NA (needs DHARMa and the coords columns)" else
+                  sprintf("Moran's I = %.3f, p = %s", final_check$resid_moran_i,
+                          format.pval(final_check$resid_moran_p, digits = 3))))
     cat("formula:", final_formula, "\n")
     cat("outputs ->", normalizePath(outdir), "\n")
 

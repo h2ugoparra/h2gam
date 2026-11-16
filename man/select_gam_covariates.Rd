@@ -43,7 +43,8 @@ and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}. May be
 \code{character()} for an intercept-only baseline.}
 
 \item{coords}{Length-2 character vector naming the longitude and latitude
-columns, used for spatial folds and complete-case filtering.}
+columns, used for spatial folds, complete-case filtering, and the
+residual spatial autocorrelation check in \code{final_check}.}
 
 \item{family}{\code{"auto"} (default) profiles the response and takes the
 lowest-AIC candidate that fits on the structural-only model. Candidates
@@ -186,7 +187,17 @@ independent test.
 \code{final_check} holds \code{dispersion} (Pearson) and \code{resid_ks_p} (DHARMa
 residual uniformity; \code{NA} without DHARMa) for the final model. The
 family table reports the same two measures for the structural-only
-model, before any covariate is in.
+model, before any covariate is in. \code{resid_moran_i} and \code{resid_moran_p}
+are Moran's I of those residuals over the \code{coords} locations and its
+p-value (DHARMa's spatial autocorrelation test, on distances in
+\code{cv_metric}; residuals of rows sharing a location are aggregated). A
+positive I with a small p-value means the final model leaves spatial
+structure unexplained, so its standard errors and p-values are too
+optimistic; the cross-validated selection does not depend on them. With
+many locations even a negligible I is significant, so read the size of I
+as well. Both are \code{NA} without DHARMa, when the \code{coords} columns are
+absent or have missing values in the final-fit rows, or above 10,000
+distinct locations (the test needs their full distance matrix).
 
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
 \code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png},
