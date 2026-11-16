@@ -120,7 +120,7 @@ the files.}
 
 \item{logfile}{Filename (within \code{outdir}) for a run log that captures all
 the console output (which opens with a header giving the h2gam, mgcv and
-R versions and every setting of the run), plus warnings, messages and the error that stopped a
+R versions and the model and CV settings of the run), plus warnings, messages and the error that stopped a
 failed run (each distinct text once, where it first occurred); \code{NULL}
 disables it. Only written when \code{verbose = TRUE} (there is nothing to
 capture otherwise). The sink is unwound on exit, so an error mid-run
@@ -133,10 +133,13 @@ the final model summary.}
 }
 \value{
 (Invisibly) a list: \code{model} (the final mgcv gam), \code{kept} (selected
-covariate names), \code{family} (chosen family label), \code{decision} (per-candidate
+covariate names), \code{family} (chosen family label; \code{"user"} when a family
+was supplied), \code{decision} (per-candidate
 decision table, also written to \code{covariate_decision_table.csv}; see
 below), \code{path}
-(forward-selection steps), \code{formula} (final formula as a string),
+(forward-selection steps: one row per acceptance or concurvity rejection,
+with \code{step}, \code{var}, \code{action}, \code{concurvity}, \code{cv_gain} and \code{cv_se}; \code{NULL}
+when there were none), \code{formula} (final formula as a string),
 \code{dev_expl} (deviance explained), \code{cv} and \code{final_check} (see below), \code{folds} (integer fold vector, one per row used in the search), and
 \code{logfile} (path to the run log, or \code{NULL} if none was written).
 

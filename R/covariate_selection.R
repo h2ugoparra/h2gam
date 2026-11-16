@@ -851,7 +851,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the files.
 #' @param logfile Filename (within `outdir`) for a run log that captures all
 #'   the console output (which opens with a header giving the h2gam, mgcv and
-#'   R versions and every setting of the run), plus warnings, messages and the error that stopped a
+#'   R versions and the model and CV settings of the run), plus warnings, messages and the error that stopped a
 #'   failed run (each distinct text once, where it first occurred); `NULL`
 #'   disables it. Only written when `verbose = TRUE` (there is nothing to
 #'   capture otherwise). The sink is unwound on exit, so an error mid-run
@@ -861,10 +861,13 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the final model summary.
 #'
 #' @return (Invisibly) a list: `model` (the final mgcv gam), `kept` (selected
-#'   covariate names), `family` (chosen family label), `decision` (per-candidate
+#'   covariate names), `family` (chosen family label; `"user"` when a family
+#'   was supplied), `decision` (per-candidate
 #'   decision table, also written to `covariate_decision_table.csv`; see
 #'   below), `path`
-#'   (forward-selection steps), `formula` (final formula as a string),
+#'   (forward-selection steps: one row per acceptance or concurvity rejection,
+#'   with `step`, `var`, `action`, `concurvity`, `cv_gain` and `cv_se`; `NULL`
+#'   when there were none), `formula` (final formula as a string),
 #'   `dev_expl` (deviance explained), `cv` and `final_check` (see below), `folds` (integer fold vector, one per row used in the search), and
 #'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
@@ -976,8 +979,7 @@ select_gam_covariates <- function(
     # the console by the split sink, on top of R's own report of the
     # condition. `con` is in append mode, so its later writes land after this.
     flush(con)
-    cat(txt, "
-", sep = "", file = path, append = TRUE)
+    cat(txt, "\n", sep = "", file = path, append = TRUE)
   }
   invisible(withCallingHandlers(run(), warning = note("Warning: "),
                                 message = note(""), error = note("Error: ")))
@@ -988,7 +990,7 @@ select_covariates_impl <- function(
     spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
     cv_linkage, knots, offset, outdir, logfile, seed, verbose) {
 
-  # Run header, before anything can fail: the versions and every setting, so
+  # Run header, before anything can fail: the versions and the settings, so
   # a log shows which code and thresholds produced it.
   if (verbose) {
     show <- function(x) if (is.null(x)) "NULL" else paste(as.character(x), collapse = ", ")

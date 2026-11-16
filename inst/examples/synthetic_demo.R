@@ -39,8 +39,8 @@ candidates <- c("sst", "chl", "chl_dup", "noise1", "noise2")
 # --- Run selection ------------------------------------------------------------
 # Structural spatial term te(lon, lat) is forced in; candidates must improve
 # cross-validated held-out deviance over and above it. Spatial-block folds
-# (the default) need the sf package for the euclidean metric; use haversine to
-# stay dependency-free in this demo.
+# with the haversine metric (both defaults) need no optional package; sf is
+# only needed to reproject for the euclidean metric (cv_crs).
 res <- select_gam_covariates(
   data       = df,
   response   = "catch",
