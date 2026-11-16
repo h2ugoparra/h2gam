@@ -17,6 +17,13 @@
   case its standard errors and p-values are too optimistic. Both are `NA`
   without DHARMa, without usable `coords` columns, or above 10,000 distinct
   locations.
+* A new output, `residual_map.png`, maps the final model's residuals at
+  each location, and the result gains `resid_map`, the data behind it (one
+  row per location: the coordinates, the number of rows there, and the
+  residual). Moran's I says whether spatial structure is left; the map
+  shows where. Residuals are DHARMa scaled residuals, or mean deviance
+  residuals without DHARMa. Not produced when the `coords` columns are
+  absent.
 
 # h2gam 0.4.0
 

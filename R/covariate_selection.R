@@ -124,21 +124,37 @@ dharma_ks <- function(m, sim = dharma_sim(m)) {
 # pairwise distance matrix (8 * n^2 bytes, several copies of it inside the test).
 moran_max_locations <- 10000
 
-# Moran's I of the DHARMa residuals over the sample locations (x, y), and its
+# The final model's residuals, one row per location (x, y): the DHARMa scaled
+# residual (0..1, 0.5 = as expected; rows sharing a location are aggregated by
+# DHARMa), or the mean deviance residual when there are no simulated residuals.
+# `sim` in the result is aligned with the table's rows. NULL without usable
+# coordinates.
+resid_by_location <- function(model, sim, x, y) {
+  r <- residuals(model, type = "deviance")
+  if (is.null(x) || is.null(y) || length(x) != length(r) ||
+      !all(is.finite(x) & is.finite(y))) return(NULL)
+  g   <- factor(paste(x, y))
+  dup <- nlevels(g) < length(g)
+  # aggregated residuals come back in level order; otherwise keep the row order
+  u <- if (dup) { w <- which(!duplicated(g)); w[order(g[w])] } else seq_along(g)
+  if (!is.null(sim) && dup)
+    sim <- tryCatch(suppressMessages(DHARMa::recalculateResiduals(sim, group = g)),
+                    error = function(e) NULL)
+  lev <- as.integer(g[u])
+  list(sim = sim,
+       type = if (is.null(sim)) "deviance" else "DHARMa scaled",
+       table = data.frame(x = x[u], y = y[u], n = tabulate(as.integer(g))[lev],
+                          resid = if (is.null(sim)) as.vector(tapply(r, g, mean))[lev] else
+                            sim$scaledResiduals))
+}
+
+# Moran's I of DHARMa residuals `sim` at the distinct locations (x, y), and its
 # p-value; NA when it cannot be computed. Distances follow the CV metric:
 # great-circle for "haversine", else planar (reprojected when `crs` is given).
-# The test needs distinct locations, so residuals are aggregated by location.
 dharma_moran <- function(sim, x, y, metric = "haversine", crs = NULL) {
   na <- list(i = NA_real_, p = NA_real_)
-  if (is.null(sim) || is.null(x) || is.null(y) || !all(is.finite(x) & is.finite(y))) return(na)
-  g <- factor(paste(x, y))
-  if (nlevels(g) < 3 || nlevels(g) > moran_max_locations) return(na)
+  if (is.null(sim) || length(x) < 3 || length(x) > moran_max_locations) return(na)
   tryCatch(suppressMessages({
-    if (nlevels(g) < length(g)) {
-      sim <- DHARMa::recalculateResiduals(sim, group = g)
-      u <- which(!duplicated(g)); u <- u[order(g[u])]   # groups come back in level order
-      x <- x[u]; y <- y[u]
-    }
     d <- if (metric == "haversine") .haversine_dist(y, x) else {
       xy <- cbind(x, y)
       if (!is.null(crs)) xy <- sf::sf_project(from = "+proj=longlat +datum=WGS84", to = crs, pts = xy)
@@ -147,6 +163,28 @@ dharma_moran <- function(sim, x, y, metric = "haversine", crs = NULL) {
     t <- DHARMa::testSpatialAutocorrelation(sim, distMat = d, plot = FALSE)
     list(i = unname(t$statistic["observed"]), p = t$p.value)
   }), error = function(e) na)
+}
+
+# Map of the per-location residuals (`loc` from resid_by_location): blue where
+# the model predicts too high, red where too low, grey where as expected. A
+# patch of one colour is spatial structure the model has not explained.
+plot_resid_map <- function(loc, labs, lonlat) {
+  t   <- loc$table
+  mid <- if (loc$type == "deviance") 0 else 0.5
+  lim <- if (loc$type == "deviance") max(abs(t$resid), 1e-8) else 0.5
+  pal <- grDevices::colorRampPalette(c("#2166ac", "#f0efec", "#b2182b"))(11)
+  col <- pal[cut(t$resid, seq(mid - lim, mid + lim, length.out = 12), include.lowest = TRUE)]
+  o   <- order(abs(t$resid - mid))                    # largest misfit drawn last
+  # lon/lat degrees: stretch so both axes are in the same ground distance
+  asp <- if (lonlat) 1 / cos(mean(range(t$y)) * pi / 180) else 1
+  graphics::par(mar = c(7, 4, 3, 1))                  # room for the legend below the axis
+  graphics::plot(t$x[o], t$y[o], asp = asp, pch = 21, bg = col[o], col = "grey45", lwd = 0.4,
+                 cex = max(0.6, min(1.6, 30 / sqrt(nrow(t)))), xlab = labs[1], ylab = labs[2],
+                 main = sprintf("Final model residuals by location (%s)", loc$type))
+  graphics::legend("bottom", inset = c(0, -0.2), xpd = TRUE, horiz = TRUE, bty = "n",
+                   pch = 21, pt.bg = pal[c(1, 6, 11)], col = "grey45", pt.cex = 1.5,
+                   legend = c("observed lower than predicted", "as predicted",
+                              "observed higher than predicted"))
 }
 
 # Fit each candidate family on the structural-only model, rank by AIC (ok
@@ -910,7 +948,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   (forward-selection steps: one row per acceptance or concurvity rejection,
 #'   with `step`, `var`, `action`, `concurvity`, `cv_gain` and `cv_se`; `NULL`
 #'   when there were none), `formula` (final formula as a string),
-#'   `dev_expl` (deviance explained), `cv` and `final_check` (see below), `folds` (integer fold vector, one per row used in the search), and
+#'   `dev_expl` (deviance explained), `cv`, `final_check` and `resid_map` (see below), `folds` (integer fold vector, one per row used in the search), and
 #'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
 #'   The `decision` table has one row per candidate. `cv_gain` and `cv_se`
@@ -960,8 +998,20 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   absent or have missing values in the final-fit rows, or above 10,000
 #'   distinct locations (the test needs their full distance matrix).
 #'
+#'   `resid_map` is the data behind that test and behind
+#'   `residual_map.png`: a data frame with one row per distinct location (the
+#'   two `coords` columns), `n` (rows at that location) and `resid`, the final
+#'   model's DHARMa scaled residual there (0 to 1; 0.5 is as predicted, near 1
+#'   the observations are higher than predicted, near 0 lower). Without DHARMa
+#'   `resid` is the mean deviance residual instead (0 is as predicted);
+#'   `attr(resid_map, "type")` says which. On the map a patch of one colour is
+#'   spatial structure the model has not explained. `NULL`, and no map, when
+#'   the `coords` columns are absent or have missing values in the final-fit
+#'   rows. Use it to draw the residuals over your own base map.
+#'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
 #'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`,
+#'   `residual_map.png` (when `resid_map` is available),
 #'   and (unless disabled) the run log named by `logfile`.
 #'
 #' @examples
@@ -1249,9 +1299,9 @@ select_covariates_impl <- function(
   # Moran's I asks what neither of them does: whether the residuals are still
   # spatially autocorrelated once the structural terms and covariates are in.
   sim   <- dharma_sim(model)
-  moran <- if (length(coords) == 2 && all(coords %in% names(final_data)))
-    dharma_moran(sim, final_data[[coords[1]]], final_data[[coords[2]]], cv_metric, cv_crs) else
-    dharma_moran(NULL)
+  loc   <- if (length(coords) == 2 && all(coords %in% names(final_data)))
+    resid_by_location(model, sim, final_data[[coords[1]]], final_data[[coords[2]]])
+  moran <- dharma_moran(loc$sim, loc$table$x, loc$table$y, cv_metric, cv_crs)
   final_check <- list(
     dispersion = sum(residuals(model, type = "pearson")^2) / model$df.residual,
     resid_ks_p = dharma_ks(model, sim),
@@ -1339,6 +1389,17 @@ select_covariates_impl <- function(
            error = function(e) { graphics::plot.new(); graphics::title(conditionMessage(e)) },
            finally = grDevices::dev.off())
 
+  # Where the residuals are: the map behind the Moran's I above.
+  resid_map <- NULL
+  if (!is.null(loc)) {
+    resid_map <- stats::setNames(loc$table, c(coords, "n", "resid"))
+    attr(resid_map, "type") <- loc$type
+    grDevices::png(file.path(outdir, "residual_map.png"), width = 1400, height = 1100, res = 130)
+    tryCatch(plot_resid_map(loc, coords, lonlat = cv_metric == "haversine" || !is.null(cv_crs)),
+             error = function(e) { graphics::plot.new(); graphics::title(conditionMessage(e)) },
+             finally = grDevices::dev.off())
+  }
+
   final_formula <- paste(deparse(formula(model)), collapse = " ")
   dev_expl <- summary(model)$dev.expl
 
@@ -1374,6 +1435,7 @@ select_covariates_impl <- function(
 
   invisible(list(model = model, kept = kept, family = fs$chosen,
                  decision = decision, path = fw$path, formula = final_formula,
-                 dev_expl = dev_expl, cv = cv, final_check = final_check, folds = folds,
+                 dev_expl = dev_expl, cv = cv, final_check = final_check,
+                 resid_map = resid_map, folds = folds,
                  logfile = if (do_log) file.path(outdir, logfile) else NULL))
 }

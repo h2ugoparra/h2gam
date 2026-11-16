@@ -151,7 +151,7 @@ below), \code{path}
 (forward-selection steps: one row per acceptance or concurvity rejection,
 with \code{step}, \code{var}, \code{action}, \code{concurvity}, \code{cv_gain} and \code{cv_se}; \code{NULL}
 when there were none), \code{formula} (final formula as a string),
-\code{dev_expl} (deviance explained), \code{cv} and \code{final_check} (see below), \code{folds} (integer fold vector, one per row used in the search), and
+\code{dev_expl} (deviance explained), \code{cv}, \code{final_check} and \code{resid_map} (see below), \code{folds} (integer fold vector, one per row used in the search), and
 \code{logfile} (path to the run log, or \code{NULL} if none was written).
 
 The \code{decision} table has one row per candidate. \code{cv_gain} and \code{cv_se}
@@ -199,8 +199,20 @@ as well. Both are \code{NA} without DHARMa, when the \code{coords} columns are
 absent or have missing values in the final-fit rows, or above 10,000
 distinct locations (the test needs their full distance matrix).
 
+\code{resid_map} is the data behind that test and behind
+\code{residual_map.png}: a data frame with one row per distinct location (the
+two \code{coords} columns), \code{n} (rows at that location) and \code{resid}, the final
+model's DHARMa scaled residual there (0 to 1; 0.5 is as predicted, near 1
+the observations are higher than predicted, near 0 lower). Without DHARMa
+\code{resid} is the mean deviance residual instead (0 is as predicted);
+\code{attr(resid_map, "type")} says which. On the map a patch of one colour is
+spatial structure the model has not explained. \code{NULL}, and no map, when
+the \code{coords} columns are absent or have missing values in the final-fit
+rows. Use it to draw the residuals over your own base map.
+
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
 \code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png},
+\code{residual_map.png} (when \code{resid_map} is available),
 and (unless disabled) the run log named by \code{logfile}.
 }
 \description{

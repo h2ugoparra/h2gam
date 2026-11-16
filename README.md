@@ -60,6 +60,7 @@ Written to `outdir` (by default the session's temporary directory, so set it to 
 - `covariate_decision_table.csv` — per-candidate accept/reject decisions with scores
 - `selection_diagnostics.png` — adequacy diagnostics of the final model
 - `partial_effects.png` — partial effect plots of the kept smooths
+- `residual_map.png` — the final model's residuals at each location; a patch of one colour is spatial structure the model has not explained
 - `covariate_selection_log.txt` — the run log: console output plus warnings, messages and the error that stopped a failed run (written when `verbose = TRUE`; rename or disable it with `logfile`)
 
-The returned list carries the fitted `mgcv` model, the kept covariate set, the chosen family, the decision table, the selection path, the final formula, deviance explained, the held-out deviance gained by the kept covariates (`cv`), the final model's dispersion, residual-uniformity check and residual spatial autocorrelation (Moran's I) (`final_check`), the CV folds, and the path to the run log.
+The returned list carries the fitted `mgcv` model, the kept covariate set, the chosen family, the decision table, the selection path, the final formula, deviance explained, the held-out deviance gained by the kept covariates (`cv`), the final model's dispersion, residual-uniformity check and residual spatial autocorrelation (Moran's I) (`final_check`), the residuals by location behind the map (`resid_map`), the CV folds, and the path to the run log.
