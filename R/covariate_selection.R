@@ -8,16 +8,15 @@
 #      positive / gaussian branches), ranked by AIC alone; dispersion and
 #      residual uniformity are reported for inspection, not scored;
 #   2. forward-selects a DECORRELATED, prediction-relevant covariate subset,
-#      scored by spatial-block CV skill, with a concurvity gate and a 1-SE
-#      stopping rule;
-#   3. runs a backward elimination re-check (BIC), a final select=TRUE
+#      scored by cross-validated skill (spatial-block or stratified folds),
+#      with a concurvity gate and a 1-SE stopping rule;
+#   3. runs a backward elimination re-check (same CV rule), a final select=TRUE
 #      shrinkage fit, and adequacy diagnostics.
 #
-# Every threshold is a logged, overridable argument; nothing is hardcoded to a
-# particular dataset. Structural (spatial/temporal) terms are forced in and not
-# screened -- covariates must earn their place OVER AND ABOVE them.
-#
-# Design decisions and rationale: see the approved plan.
+# Every threshold is an overridable argument. The defaults for `structural`
+# and `coords` assume columns named month, year, lon and lat. Structural
+# (spatial/temporal) terms are forced in and not screened -- covariates must
+# earn their place OVER AND ABOVE them.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -27,9 +26,6 @@
 profile_response <- function(y) {
   y <- y[is.finite(y)]
   list(
-    n          = length(y),
-    min        = min(y),
-    max        = max(y),
     integer    = all(abs(y - round(y)) < 1e-8),
     binary     = all(y %in% c(0, 1)),
     nonneg     = all(y >= 0),
@@ -37,16 +33,15 @@ profile_response <- function(y) {
     in01       = all(y >= 0 & y <= 1),
     frac_zero  = mean(y == 0),
     frac_one   = mean(y == 1),
-    mean       = mean(y),
-    var        = stats::var(y),
-    dispersion = if (mean(y) > 0) stats::var(y) / mean(y) else NA_real_,
     skew       = mean((y - mean(y))^3) / stats::sd(y)^3
   )
 }
 
-# Ordered list of candidate family generators for the profiled response.
-# Each element is a zero-arg closure returning a FRESH mgcv family (fresh
-# matters: nb()/tw() carry a mutable theta/p estimate in their environment).
+# Candidate family generators for the profiled response. Each element is a
+# zero-arg closure returning a FRESH mgcv family (fresh matters: nb()/tw()
+# carry a mutable theta/p estimate in their environment). Candidates within a
+# branch are ranked by AIC, so they must share a likelihood type on the same
+# response: all probabilities, or all densities.
 family_candidates <- function(p) {
   cand <- list()
   add <- function(name, gen) cand[[name]] <<- gen
@@ -54,10 +49,10 @@ family_candidates <- function(p) {
   if (p$binary) {
     # ---- presence/absence ----
     # logit is the conventional default, but cloglog is the mechanistically
-    # consistent link for effort-offset longline data: with offset(log(nhooks)),
-    #   cloglog(p) = log(nhooks) + f  <=>  p = 1 - exp(-nhooks * exp(f)),
-    # i.e. the probability of >=1 catch under a Poisson encounter rate ~ hooks
-    # (the presence analogue of the log-link count model). probit is included as
+    # consistent link when there is an exposure offset: with offset(log(exposure)),
+    #   cloglog(p) = log(exposure) + f  <=>  p = 1 - exp(-exposure * exp(f)),
+    # i.e. the probability of >=1 event under a Poisson rate proportional to
+    # the exposure (the presence analogue of the log-link count model). probit is included as
     # a cheap symmetric alternative. AIC is comparable across links here (same
     # response and likelihood), and AIC alone is what picks among them.
     add("binomial_logit",   function() binomial(link = "logit"))
@@ -66,15 +61,12 @@ family_candidates <- function(p) {
 
   } else if (p$integer && p$nonneg) {
     # ---- count branch ----
-    if (!is.na(p$dispersion) && p$dispersion > 1.5) {
-      add("nb",      function() nb())        # overdispersed -> negative binomial
-      add("tw",      function() tw())        # Tweedie handles zero-mass + tail
-      add("poisson", function() poisson())
-    } else {
-      add("poisson", function() poisson())
-      add("nb",      function() nb())
-    }
-    if (p$frac_zero > 0.5) add("tw", function() tw())
+    # Tweedie is deliberately not a candidate: its likelihood is a density,
+    # Poisson/nb give probabilities, and on low counts the density at integer
+    # values is arbitrarily large -- it "wins" on AIC by hundreds of units on
+    # truly Poisson/nb data. Pass family = tw explicitly to use it.
+    add("poisson", function() poisson())
+    add("nb",      function() nb())
 
   } else if (p$in01 && p$frac_zero == 0 && p$frac_one == 0) {
     # ---- proportion, open interval ----
@@ -83,8 +75,10 @@ family_candidates <- function(p) {
 
   } else if (p$in01) {
     # ---- proportion with 0/1 boundary (caller applies SV squeeze for betar) ----
+    # The only candidate: the squeezed-beta AIC is set by the squeeze constant
+    # (the density is unbounded at the boundary), so it cannot be ranked
+    # against a model of the raw response such as Tweedie.
     add("betar_sv", function() betar())
-    add("tw",       function() tw())
 
   } else if (p$positive) {
     # ---- strictly positive continuous ----
@@ -133,8 +127,8 @@ suggest_family <- function(data, response, structural, knots, offset = NULL) {
   fits  <- list()
 
   # Rank families on the SAME offset model the pipeline deploys. This matters for
-  # the binomial cloglog candidate (its log(nhooks) offset is what gives it the
-  # "P(>=1 catch)" meaning) and keeps AIC comparable to the search/final fits.
+  # the binomial cloglog candidate (its log(exposure) offset is what gives it the
+  # "P(>=1 event)" meaning) and keeps AIC comparable to the search/final fits.
   off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
 
   for (nm in names(cands)) {
@@ -168,7 +162,7 @@ suggest_family <- function(data, response, structural, knots, offset = NULL) {
   }
   rownames(tab) <- NULL
 
-  list(profile = p, table = tab, chosen = chosen,
+  list(table = tab, chosen = chosen,
        family_gen = cands[[chosen]], squeeze = identical(chosen, "betar_sv"),
        fit = fits[[chosen]])
 }
@@ -184,24 +178,37 @@ family_object_gen <- function(family) {
   function() { family$putTheta(th0); family }
 }
 
-# Family generator with the shape parameter (Tweedie p / negbin theta) held
-# FIXED at its structural-only estimate. Re-estimating it on every CV fit is the
-# dominant cost of the search; fixing it gives a large speedup with negligible
-# effect on ranking. The final fit still uses the free (re-estimating) family.
-make_select_gen <- function(chosen, free_gen, fit) {
-  if (is.null(fit)) return(free_gen)
-  th <- tryCatch(fit$family$getTheta(TRUE), error = function(e) NA_real_)
-  if (identical(chosen, "tw") && is.finite(th))
-    return(function() Tweedie(p = th, link = power(0)))
-  if (identical(chosen, "nb") && is.finite(th))
-    return(function() negbin(theta = th, link = "log"))
-  free_gen
+# Family generator with the shape parameter (negbin theta / Tweedie p / beta
+# precision / scaled-t df+scale) held FIXED at its structural-only estimate
+# (`fit`). Two reasons: held-out deviance is only comparable between models
+# that share the shape value -- left free, a real driver raises nb theta and
+# with it the held-out deviance, so the search rejects it -- and re-estimating
+# it on every CV fit is the dominant cost of the search. The final fit still
+# uses the free (re-estimating) family. mgcv constructors take a positive
+# `theta` as known; the fitted link is carried over.
+make_select_gen <- function(free_gen, fit) {
+  fam <- fit$family
+  if (!inherits(fam, "extended.family") || !isTRUE(fam$n.theta > 0)) return(free_gen)
+  ctor <- list("Negative Binomial" = nb, "Tweedie" = tw, "Beta regression" = betar,
+               "Scaled t" = scat)[[sub("\\(.*", "", fam$family)]]
+  th <- tryCatch(fam$getTheta(TRUE), error = function(e) NA_real_)
+  if (is.null(ctor) || !all(is.finite(th)) || any(th <= 0)) {
+    warning(sprintf(paste0("family '%s': its shape parameter cannot be held fixed during the ",
+                           "search, so it is re-estimated on every CV fit and CV gains are ",
+                           "not strictly comparable between models."), fam$family),
+            call. = FALSE)
+    return(free_gen)
+  }
+  # do.call passes the link by value: the constructors read it with
+  # substitute(), and newer mgcv rejects a variable name there.
+  args <- list(theta = th, link = fam$link)
+  function() do.call(ctor, args)
 }
 
 # ---------------------------------------------------------------------------
-# 2. Spatial-block folds -- SPCV (mirrors h2ml.features.spatial_cv.SPCVSplitter)
+# 2. Spatial-block folds -- SPCV
 # ---------------------------------------------------------------------------
-# Two-stage spatial CV (Wang et al. 2023), faithful R port of the h2ml method:
+# Two-stage spatial CV (Wang et al. 2023):
 #   Stage 1  AHC blocks: agglomerative hierarchical clustering on coordinates
 #            (euclidean, or haversine for lat/lon degrees) cut at a distance
 #            threshold (default = 10th percentile of pairwise distances).
@@ -217,6 +224,14 @@ make_select_gen <- function(chosen, free_gen, fit) {
        (cos(latr) %o% cos(latr)) * sin(outer(lonr, lonr, "-") / 2)^2
   root <- sqrt(a); root[root > 1] <- 1        # clamp in place (keeps matrix dims)
   2 * asin(root)
+}
+
+# Stop with a clear message when named columns are missing from `data`.
+.need_cols <- function(data, cols, what) {
+  miss <- setdiff(cols, names(data))
+  if (length(miss))
+    stop(sprintf("%s column(s) not found in data: %s.", what, paste(miss, collapse = ", ")),
+         call. = FALSE)
 }
 
 # Snapshot the caller's RNG state and return a function that restores it, so
@@ -247,8 +262,7 @@ make_select_gen <- function(chosen, free_gen, fit) {
 
 #' Spatial-block cross-validation folds (SPCV)
 #'
-#' Two-stage spatial CV (Wang et al. 2023), a faithful R port of the h2ml
-#' `SPCVSplitter`. Stage 1 builds spatially coherent blocks by agglomerative
+#' Two-stage spatial CV (Wang et al. 2023). Stage 1 builds spatially coherent blocks by agglomerative
 #' hierarchical clustering on the coordinates, cut at a distance threshold.
 #' Stage 2 groups the blocks into `k` folds by a cluster ensemble (HBGF):
 #' per-block means of location, covariates, and response are each k-means
@@ -282,10 +296,12 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #'   proj string or EPSG code) used to reproject lon/lat to a planar system
 #'   before computing distances (needs the sf package). No projection is
 #'   assumed by default, so this function makes no study-area assumption.
-#' @param linkage AHC linkage method, passed to [stats::hclust()]. `"ward"`
-#'   is taken as `"ward.D2"` (the Ward criterion on unsquared distances,
-#'   matching scikit-learn). Ward variants are downgraded to `"average"` for
-#'   haversine, where they are invalid.
+#' @param linkage AHC linkage method, passed to [stats::hclust()]. The
+#'   default `"ward.D2"` is the Ward criterion on unsquared distances
+#'   (matching scikit-learn) and the same default as
+#'   [select_gam_covariates()]; `"ward"` is taken as `"ward.D2"`. Ward
+#'   variants are downgraded to `"average"` for haversine, where they are
+#'   invalid, so the default metric clusters with average linkage.
 #' @param pca_var Fraction of variance retained when the stage-2 covariate
 #'   view is compressed by PCA.
 #' @param seed Random seed for the k-means / spectral steps.
@@ -298,10 +314,14 @@ make_select_gen <- function(chosen, free_gen, fit) {
 #' @export
 make_spatial_folds <- function(data, response, candidates, coords = c("lon", "lat"),
                                k = 10, metric = "haversine", threshold = NULL,
-                               crs = NULL, linkage = "average", pca_var = 0.95,
+                               crs = NULL, linkage = "ward.D2", pca_var = 0.95,
                                seed = 42, verbose = TRUE) {
   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
+  if (length(coords) != 2) stop("`coords` must name exactly two columns.")
+  .need_cols(data, coords, "coords"); .need_cols(data, response, "response")
   c1 <- data[[coords[1]]]; c2 <- data[[coords[2]]]           # coord 1 (x/lon), coord 2 (y/lat)
+  if (!all(is.finite(c1) & is.finite(c2) & is.finite(data[[response]])))
+    stop("make_spatial_folds: missing or non-finite values in the coordinates or response; drop those rows first.")
   # hclust's "ward" is the legacy alias for "ward.D"; scikit-learn's Ward (which
   # SPCV mirrors) is "ward.D2".
   if (identical(linkage, "ward")) linkage <- "ward.D2"
@@ -340,6 +360,8 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
   # -- Stage 2: cluster ensemble (HBGF) -> folds --------------------------
   num  <- candidates[vapply(candidates, function(v) is.numeric(data[[v]]), logical(1))]
   Xmat <- as.matrix(data[, num, drop = FALSE])
+  if (!all(is.finite(Xmat)))
+    stop("make_spatial_folds: missing or non-finite values in the numeric candidates; drop those rows first.")
   bmean <- function(v) as.numeric(tapply(v, blocks, mean))
   block_coords <- cbind(bmean(loc[, 1]), bmean(loc[, 2]))    # projected coords when euclidean
   block_y      <- matrix(bmean(data[[response]]), ncol = 1)
@@ -406,7 +428,9 @@ make_spatial_folds <- function(data, response, candidates, coords = c("lon", "la
 #' @export
 make_stratified_folds <- function(data, response, k = 5, seed = 1, verbose = TRUE) {
   restore_rng <- .rng_restorer(); on.exit(restore_rng(), add = TRUE)
+  .need_cols(data, response, "response")
   y <- data[[response]]
+  if (anyNA(y)) stop("make_stratified_folds: the response has missing values; drop those rows first.")
   # Strata: exact label values for a few-valued response (binary / integer
   # label), else quantile bins so a continuous response stays balanced too.
   strata <- if (length(unique(y[is.finite(y)])) <= max(k, 10)) {
@@ -500,21 +524,41 @@ fit_search <- function(form, data, family_gen, knots) {
 
 # Concurvity of a newly added smooth against the already-accepted covariate
 # smooths only (structural terms deliberately excluded). Returns the worst
-# pairwise value, 0 when nothing to compare against.
+# pairwise value, 0 when nothing to compare against, and NA when it cannot be
+# computed -- the caller must not read that as "no concurvity".
 concurvity_new <- function(model, newvar, accepted) {
   if (length(accepted) == 0) return(0)
   cc <- tryCatch(concurvity(model, full = FALSE), error = function(e) NULL)
-  if (is.null(cc)) return(0)
+  if (is.null(cc)) return(NA_real_)
   W    <- cc$worst
-  rlab <- intersect(paste0("s(", newvar, ")"), rownames(W))
-  clab <- intersect(paste0("s(", accepted, ")"), colnames(W))
-  if (length(rlab) == 0 || length(clab) == 0) return(0)
+  rlab <- paste0("s(", newvar, ")")
+  clab <- paste0("s(", accepted, ")")
+  if (!rlab %in% rownames(W) || !all(clab %in% colnames(W))) return(NA_real_)
   max(W[rlab, clab, drop = FALSE])
+}
+
+# A random-effect smooth or smooth spec: bs = 're', bs = 'fs', or a tensor
+# with such a margin.
+is_re_smooth <- function(s) {
+  is.list(s) &&
+    (inherits(s, c("random.effect", "fs.interaction", "re.smooth.spec", "fs.smooth.spec")) ||
+       any(vapply(s$margin, is_re_smooth, logical(1))))
+}
+
+# Per-fold CV gain of a model over a reference model: the log ratio of their
+# held-out deviances (positive = the model predicts better). A ratio, not a
+# difference, so every fold counts by its proportional improvement: with
+# differences, one badly predicted fold (a block the reference model
+# extrapolates into, say) sets both the mean gain and its standard error, and
+# the 1-SE rule then follows that fold alone. NA where it cannot be computed.
+fold_gain <- function(ref_dev, dev) {
+  g <- log(ref_dev / dev)
+  g[!is.finite(g)] <- NA_real_
+  g
 }
 
 forward_select <- function(data, response, candidates, structural, family_gen,
                            folds, knots, concurvity_max = 0.8, offset = NULL,
-                           re_vars = character(), re_labels = character(),
                            verbose = TRUE) {
   off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
   fold_ids <- sort(unique(folds))
@@ -534,11 +578,18 @@ forward_select <- function(data, response, candidates, structural, family_gen,
       if (is.null(m)) next
       # Random-effect terms (e.g. s(year, bs='re')) are excluded from held-out
       # prediction -- their level-specific deviation is unknowable out of fold
-      # (matches the deployment predict(..., exclude=...)). Remap the factor to a
-      # training level so the design matrix builds; the excluded term zeroes it.
-      for (v in re_vars) te[[v]] <- factor(as.character(tr[[v]][1]), levels = levels(tr[[v]]))
+      # (matches the deployment predict(..., exclude=...)). They are read off
+      # the fit, so every form is covered (random slopes, by=, bs='fs', tensor
+      # margins). Levels unseen in training are remapped to a training level so
+      # the design matrix builds; the excluded term zeroes it.
+      re <- Filter(is_re_smooth, m$smooth)
+      for (v in unique(unlist(lapply(re, `[[`, "term")))) if (is.factor(tr[[v]])) {
+        unseen <- !te[[v]] %in% tr[[v]]
+        te[[v]][unseen] <- tr[[v]][1]
+      }
       mu <- tryCatch(predict(m, newdata = te, type = "response",
-                             exclude = re_labels), error = function(e) NULL)
+                             exclude = vapply(re, `[[`, "", "label")),
+                     error = function(e) NULL)
       if (is.null(mu) || length(mu) != nrow(te)) next
       dr <- tryCatch(sum(m$family$dev.resids(te[[response]], mu, rep(1, nrow(te)))) / nrow(te),
                      error = function(e) NA_real_)
@@ -558,20 +609,28 @@ forward_select <- function(data, response, candidates, structural, family_gen,
                         "only %d of %d CV folds (fit/prediction failed or non-finite ",
                         "deviance); check for NA/invalid values in the model variables."),
                  sum(is.finite(cur_dev)), length(cur_dev)))
+  # A fold the reference model (structural terms + accepted covariates) could
+  # not be scored on is lost to every candidate compared against it, because
+  # the gain is paired per fold. Track the worst case to report it.
+  ref_folds <- sum(is.finite(cur_dev))
+  base_dev  <- cur_dev
   path      <- list()
   step      <- 0
   low_folds <- character()                 # candidates scored on < half the folds
+  last      <- list()                      # each candidate's most recent CV score
+  ungated   <- character()                 # candidates whose concurvity check failed
 
   repeat {
     step <- step + 1
     scored <- lapply(remaining, function(v) {
       cd   <- fold_dev(c(accepted, v))
       if (sum(is.finite(cd)) < length(cd) / 2) low_folds <<- union(low_folds, v)
-      diff <- cur_dev - cd                 # paired per-fold improvement
+      diff <- fold_gain(cur_dev, cd)       # paired per-fold improvement
       list(v = v, cd = cd,
            mean = mean(diff, na.rm = TRUE),
            se   = stats::sd(diff, na.rm = TRUE) / sqrt(sum(is.finite(diff))))
     })
+    for (s in scored) last[[s$v]] <- data.frame(var = s$v, cv_gain = s$mean, cv_se = s$se)
     ord <- order(vapply(scored, function(s) -s$mean, numeric(1)))
 
     picked <- NULL
@@ -581,9 +640,16 @@ forward_select <- function(data, response, candidates, structural, family_gen,
       if (!is.finite(s$se) || s$mean < s$se) next      # NA se (<2 scored folds) or fails 1-SE bar
       m  <- fit_full(c(accepted, s$v))
       cg <- if (is.null(m)) NA_real_ else concurvity_new(m, s$v, accepted)
-      if (is.finite(cg) && cg > concurvity_max) {
+      # The gate fails closed: a candidate whose concurvity cannot be computed
+      # (full-data fit or concurvity() failed) is rejected, not waved through.
+      if (!is.finite(cg)) ungated <- union(ungated, s$v)
+      if (!is.finite(cg) || cg > concurvity_max) {
         path[[length(path) + 1]] <- data.frame(step = step, var = s$v, action = "reject-concurvity",
                                                 concurvity = cg, cv_gain = s$mean, cv_se = s$se)
+        # Out for good: worst-case concurvity depends only on the two smooths'
+        # bases, so against a growing accepted set it can only rise. Leaving
+        # it in would re-fit it on every fold at every later step.
+        remaining <- setdiff(remaining, s$v)
         next
       }
       picked <- s; picked$concurvity <- cg; break
@@ -598,6 +664,7 @@ forward_select <- function(data, response, candidates, structural, family_gen,
     accepted  <- c(accepted, picked$v)
     remaining <- setdiff(remaining, picked$v)
     cur_dev   <- picked$cd
+    ref_folds <- min(ref_folds, sum(is.finite(cur_dev)))
     if (length(remaining) == 0) break
   }
 
@@ -605,36 +672,62 @@ forward_select <- function(data, response, candidates, structural, family_gen,
     warning(sprintf("forward selection: %s could be scored on fewer than half the CV folds (fit/prediction failures); their CV gain is unreliable.",
                     paste(low_folds, collapse = ", ")), call. = FALSE)
 
-  list(accepted = accepted,
-       path = if (length(path)) do.call(rbind, path) else NULL)
+  if (ref_folds < length(fold_ids))
+    warning(sprintf(paste0("forward selection: the reference model could be scored on only %d ",
+                           "of %d CV folds at some step (fit/prediction failures), so the CV ",
+                           "gains compared against it rest on fewer folds than `cv_k`."),
+                    ref_folds, length(fold_ids)), call. = FALSE)
+
+  if (length(ungated))
+    warning(sprintf(paste0("forward selection: concurvity could not be computed for %s (the ",
+                           "full-data fit or concurvity() failed); rejected, since the ",
+                           "concurvity gate could not be applied."),
+                    paste(ungated, collapse = ", ")), call. = FALSE)
+
+  # base_dev / acc_dev: per-fold held-out deviance of the structural-only model
+  # and of the accepted set; fold_dev scores any other covariate set the same way.
+  list(accepted = accepted, base_dev = base_dev, acc_dev = cur_dev, fold_dev = fold_dev,
+       path = if (length(path)) do.call(rbind, path) else NULL,
+       scores = if (length(last)) do.call(rbind, last) else NULL)
 }
 
 # ---------------------------------------------------------------------------
-# 5. Backward re-check (BIC-based) & final shrinkage fit
+# 5. Backward re-check (CV-based) & final shrinkage fit
 # ---------------------------------------------------------------------------
 
-backward_recheck <- function(data, response, accepted, structural, family_gen,
-                             knots, offset = NULL, verbose = TRUE) {
-  off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
-  build <- function(terms) stats::as.formula(
-    paste(response, "~", paste(c(structural, off_term, sprintf("s(%s)", terms)), collapse = " + "))
-  )
-  fit <- function(terms) fit_search(build(terms), data, family_gen, knots)
+# Re-tests each accepted covariate against the others with the forward
+# criterion: the CV gain of the set with it over the set without it (see
+# fold_gain) must be positive and at least one standard error. A covariate accepted early can
+# lose its place once later ones are in. The weakest failing covariate is
+# dropped and the rest re-tested. `fw` is the forward_select() result.
+backward_recheck <- function(fw, verbose = TRUE) {
+  kept    <- fw$accepted
+  cur_dev <- fw$acc_dev
+  dropped <- list()
+  # On the first pass the last covariate accepted needs no re-test: it would
+  # repeat the entry test it has just passed.
+  skip <- utils::tail(kept, 1)
   repeat {
-    if (length(accepted) == 0) break
-    full <- fit(accepted); if (is.null(full)) break
-    bic_full <- BIC(full)
-    bic_drop <- vapply(accepted, function(v) {
-      r <- fit(setdiff(accepted, v)); if (is.null(r)) Inf else BIC(r)
-    }, numeric(1))
-    best <- which.min(bic_drop)
-    if (is.finite(bic_drop[best]) && bic_drop[best] < bic_full) {
-      if (verbose) cat(sprintf("  [backward] - %-18s  BIC %.1f -> %.1f\n",
-                               accepted[best], bic_full, bic_drop[best]))
-      accepted <- setdiff(accepted, accepted[best])
-    } else break
+    scored <- lapply(setdiff(kept, skip), function(v) {
+      dd   <- fw$fold_dev(setdiff(kept, v))
+      diff <- fold_gain(dd, cur_dev)
+      list(v = v, dd = dd, mean = mean(diff, na.rm = TRUE),
+           se = stats::sd(diff, na.rm = TRUE) / sqrt(sum(is.finite(diff))))
+    })
+    # A covariate whose removal cannot be scored is kept.
+    fails <- Filter(function(s) is.finite(s$mean) &&
+                      !(s$mean > 0 && is.finite(s$se) && s$mean >= s$se), scored)
+    if (!length(fails)) break
+    w <- fails[[which.min(vapply(fails, function(s) s$mean, numeric(1)))]]
+    if (verbose) cat(sprintf("  [backward] - %-18s  CV gain %.4f (se %.4f)\n", w$v, w$mean, w$se))
+    dropped[[length(dropped) + 1]] <- data.frame(var = w$v, cv_gain = w$mean, cv_se = w$se)
+    kept    <- setdiff(kept, w$v)
+    cur_dev <- w$dd
+    skip    <- character()
   }
-  accepted
+  # dev: per-fold held-out deviance of the kept set
+  list(kept = kept, dev = cur_dev,
+       dropped = if (length(dropped)) do.call(rbind, dropped) else NULL)
 }
 
 final_fit <- function(data, response, accepted, structural, family_gen, knots,
@@ -661,18 +754,28 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'    scored by cross-validated held-out deviance (spatial-block or
 #'    response-stratified folds), with a concurvity gate and a 1-SE stopping
 #'    rule;
-#' 3. runs a backward elimination re-check (BIC), a final `select = TRUE`
+#' 3. runs a backward elimination re-check (each accepted covariate must still
+#'    pass the same CV rule against all the others), a final `select = TRUE`
 #'    shrinkage fit, and adequacy diagnostics.
 #'
-#' Every threshold is a logged, overridable argument; nothing is hardcoded to
-#' a particular dataset. Structural (spatial/temporal) terms are forced in and
-#' not screened -- covariates must earn their place over and above them.
-#' Random-effect structural terms (`bs = "re"`) are excluded from held-out CV
-#' prediction, matching a deployment `predict(..., exclude = ...)`.
+#' Every threshold is an overridable argument. The defaults for `structural`
+#' and `coords` assume columns named `month`, `year`, `lon` and `lat`; set
+#' them to match your data. Structural (spatial/temporal) terms are forced in
+#' and not screened -- covariates must earn their place over and above them.
+#' Random-effect structural terms are excluded from held-out CV prediction,
+#' matching a deployment `predict(..., exclude = ...)`. That covers every
+#' `bs = "re"` form (random intercepts, random slopes such as
+#' `s(group, x1, bs = "re")`, `by =` variables), factor-smooth interactions
+#' (`bs = "fs"`), and tensor terms with an `"re"` margin. Each needs a factor
+#' grouping variable.
 #'
 #' Search fits use `mgcv::bam(discrete = TRUE)` with the family shape
-#' parameter (Tweedie p / negbin theta) fixed at its structural-only estimate
-#' for speed; the final fit is a free `mgcv::gam(method = "REML")`.
+#' parameter (negbin theta, Tweedie p, beta precision, scaled-t df and scale)
+#' fixed at its structural-only estimate, whether the family was auto-suggested
+#' or supplied. This keeps held-out deviance comparable between candidate
+#' models and is much faster. Other families with an estimated shape parameter
+#' (e.g. `ocat()`, `ziP()`) cannot be fixed this way and give a warning. The
+#' final fit is a free `mgcv::gam(method = "REML")`.
 #'
 #' @param data A data.frame with the response, coordinates, candidate
 #'   covariates, and any variables used by `structural` / `offset`.
@@ -680,15 +783,22 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' @param candidates Character vector of candidate covariate names. Each enters
 #'   the model as a `s(<name>)` smooth.
 #' @param structural Character vector of mgcv terms forced into every model
-#'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`.
+#'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`. May be
+#'   `character()` for an intercept-only baseline.
 #' @param coords Length-2 character vector naming the longitude and latitude
 #'   columns, used for spatial folds and complete-case filtering.
 #' @param family `"auto"` (default) profiles the response and takes the
-#'   lowest-AIC candidate that fits on the structural-only model. The reported
+#'   lowest-AIC candidate that fits on the structural-only model. Candidates
+#'   are limited to families whose AIC is comparable on the response: Poisson
+#'   and negative binomial for counts, squeezed beta alone for proportions
+#'   with exact 0/1. Tweedie is not auto-suggested for either (its density
+#'   cannot be ranked against count probabilities or a squeezed response);
+#'   pass `family = tw` to use it. The reported
 #'   `dispersion` and `resid_ks_p` columns are diagnostics to inspect, not
 #'   inputs to the choice. Both are measured before covariate selection, so a
 #'   low `resid_ks_p` reflects not-yet-modelled covariates and structure as much
-#'   as the family -- re-check it on the final fit before acting on it.
+#'   as the family -- compare it with `final_check` in the result, which
+#'   reports both measures for the final model.
 #'   Alternatively a family object (e.g. `nb()`) or a zero-argument family
 #'   generator (e.g. `nb`) to skip the suggestion step. For a family object
 #'   with an estimated shape parameter, theta is reset to its supplied value
@@ -696,12 +806,18 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   the constructor instead to leave your object untouched.
 #' @param concurvity_max Reject a candidate whose worst pairwise concurvity
 #'   against the already-accepted covariate smooths exceeds this (structural
-#'   terms excluded from the gate).
+#'   terms excluded from the gate). A candidate whose concurvity cannot be
+#'   computed is rejected with a warning.
 #' @param spearman_pre `|Spearman rho|` threshold for the correlation clusters
 #'   reported in the decision table (annotation only; the concurvity gate does
 #'   the actual removal).
 #' @param na_max Drop candidates whose NA/non-finite fraction exceeds this in
-#'   the univariate screen.
+#'   the univariate screen. The search runs on the rows complete for every
+#'   candidate that passes, so each CV model sees the same data; a sparse
+#'   candidate therefore costs the search rows even if it is not selected. The
+#'   log lists the rows each candidate costs, and a warning names them when
+#'   together they cost more than 10% of the rows. The final model is refitted
+#'   on all rows complete for the kept covariates.
 #' @param cv_k Number of CV folds.
 #' @param cv_scheme Fold construction: `"spatial"` (SPCV, the default; see
 #'   [make_spatial_folds()]) or `"stratified"` (non-spatial k-fold stratified
@@ -726,24 +842,70 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
 #'   instead of collapsing months 1 and 12 onto the same knot. `NULL` lets
 #'   mgcv place knots automatically; entries for absent variables are ignored.
-#' @param offset Name of an effort column; adds `offset(log(<offset>))` to
+#' @param offset Name of an exposure column (must be positive); adds `offset(log(<offset>))` to
 #'   every fit (including family suggestion, so AIC stays comparable).
 #' @param outdir Directory for the decision-table CSV, diagnostic PNGs, and the
-#'   run log (created if absent).
+#'   run log (created if absent). Defaults to the session's temporary
+#'   directory, which R deletes when the session ends: pass a path to keep
+#'   the files.
 #' @param logfile Filename (within `outdir`) for a run log that captures all
-#'   the console output; `NULL` disables it. Only written when `verbose = TRUE`
-#'   (there is nothing to capture otherwise). The sink is unwound on exit, so an
-#'   error mid-run still restores the console.
+#'   the console output (which opens with a header giving the h2gam, mgcv and
+#'   R versions and the model and CV settings of the run), plus warnings, messages and the error that stopped a
+#'   failed run (each distinct text once, where it first occurred); `NULL`
+#'   disables it. Only written when `verbose = TRUE` (there is nothing to
+#'   capture otherwise). The sink is unwound on exit, so an error mid-run
+#'   still restores the console.
 #' @param seed Random seed for fold construction.
 #' @param verbose Print progress, the family table, the selection path, and
 #'   the final model summary.
 #'
 #' @return (Invisibly) a list: `model` (the final mgcv gam), `kept` (selected
-#'   covariate names), `family` (chosen family label), `decision` (per-candidate
-#'   decision table, also written to `covariate_decision_table.csv`), `path`
-#'   (forward-selection steps), `formula` (final formula as a string),
-#'   `dev_expl` (deviance explained), `folds` (integer fold vector), and
+#'   covariate names), `family` (chosen family label; `"user"` when a family
+#'   was supplied), `decision` (per-candidate
+#'   decision table, also written to `covariate_decision_table.csv`; see
+#'   below), `path`
+#'   (forward-selection steps: one row per acceptance or concurvity rejection,
+#'   with `step`, `var`, `action`, `concurvity`, `cv_gain` and `cv_se`; `NULL`
+#'   when there were none), `formula` (final formula as a string),
+#'   `dev_expl` (deviance explained), `cv` and `final_check` (see below), `folds` (integer fold vector, one per row used in the search), and
 #'   `logfile` (path to the run log, or `NULL` if none was written).
+#'
+#'   The `decision` table has one row per candidate. `cv_gain` and `cv_se`
+#'   are the CV gain from adding the candidate and its standard error. The
+#'   gain is the mean over folds of the log ratio of held-out deviance
+#'   without the candidate to held-out deviance with it, so each fold counts
+#'   by its proportional improvement and a single badly predicted fold cannot
+#'   set the scale; `1 - exp(-cv_gain)` is the typical proportional fall in
+#'   a fold's deviance. They are taken at the step that decided its fate:
+#'   the step it was accepted or rejected for concurvity, the backward
+#'   re-check that dropped it, otherwise the last step it was scored.
+#'   `reason` is one of `"selected"`; `"concurvity"`;
+#'   `"concurvity check failed"` (concurvity could not be computed, so the
+#'   candidate was rejected; a warning names it);
+#'   `"backward-CV"` (accepted, but with the later covariates in the model
+#'   its CV gain over the set without it was no longer at least one standard
+#'   error); `"no CV improvement"` (gain <= 0); `"CV gain below 1
+#'   SE"` (positive gain smaller than its standard error); `"CV scoring
+#'   failed"` (the fits or held-out predictions failed on too many folds); or
+#'   the univariate-screen reason (`"absent"`, `"non-numeric"`, `"NA <n>%"`,
+#'   `"zero variance"`), for which the CV columns are `NA`.
+#'
+#'   `cv` summarises what the kept covariates buy out of fold: `structural`
+#'   and `selected` are the mean held-out deviance of the structural-only
+#'   model and of the model with the kept covariates, `gain` and `se` the CV
+#'   gain of the second over the first (mean per-fold log deviance ratio, as
+#'   `cv_gain` above) and its standard error, and `folds` the
+#'   number of folds scored. `by_fold` is a data frame with the same three
+#'   scores for each fold and its number of held-out rows (`NA` where a fold
+#'   could not be scored); check it for a fold either model predicts far
+#'   worse than the others, which the means hide. It uses the search fits on the folds the
+#'   covariates were selected on, so it is an optimistic guide, not an
+#'   independent test.
+#'
+#'   `final_check` holds `dispersion` (Pearson) and `resid_ks_p` (DHARMa
+#'   residual uniformity; `NA` without DHARMa) for the final model. The
+#'   family table reports the same two measures for the structural-only
+#'   model, before any covariate is in.
 #'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
 #'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`,
@@ -785,43 +947,114 @@ select_gam_covariates <- function(
     cv_linkage     = "ward.D2",
     knots          = NULL,
     offset         = NULL,
-    outdir         = ".",
+    outdir         = tempdir(),
     logfile        = "covariate_selection_log.txt",
     seed           = 1,
     verbose        = TRUE) {
 
-  stopifnot(response %in% names(data))
+  run <- function() select_covariates_impl(
+    data, response, candidates, structural, coords, family, concurvity_max,
+    spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
+    cv_linkage, knots, offset, outdir, logfile, seed, verbose)
+  # All progress output is verbose-gated: nothing to log unless verbose.
+  if (is.null(logfile) || !isTRUE(verbose)) return(invisible(run()))
+
+  # Run log: tee console output to outdir/logfile (split = TRUE keeps the
+  # console echo). sink() only sees stdout, so warnings, messages and a
+  # terminating error are written to the log by calling handlers, each
+  # distinct text once. on.exit restores the console even if the run errors.
+  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+  path <- file.path(outdir, logfile)
+  file.create(path)                        # start empty: `con` appends
+  con <- file(path, "at")
+  sink(con, split = TRUE)
+  on.exit({ sink(); close(con) }, add = TRUE)
+  seen <- character()
+  note <- function(prefix) function(cond) {
+    txt <- paste0(prefix, trimws(conditionMessage(cond), "right"))
+    if (txt %in% seen) return()
+    seen <<- c(seen, txt)
+    # Append to the file by path: writing to `con` itself would be echoed to
+    # the console by the split sink, on top of R's own report of the
+    # condition. `con` is in append mode, so its later writes land after this.
+    flush(con)
+    cat(txt, "\n", sep = "", file = path, append = TRUE)
+  }
+  invisible(withCallingHandlers(run(), warning = note("Warning: "),
+                                message = note(""), error = note("Error: ")))
+}
+
+select_covariates_impl <- function(
+    data, response, candidates, structural, coords, family, concurvity_max,
+    spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
+    cv_linkage, knots, offset, outdir, logfile, seed, verbose) {
+
+  # Run header, before anything can fail: the versions and the settings, so
+  # a log shows which code and thresholds produced it.
+  if (verbose) {
+    show <- function(x) if (is.null(x)) "NULL" else paste(as.character(x), collapse = ", ")
+    fam  <- if (identical(family, "auto")) "auto" else
+      tryCatch(paste("user-supplied:", (if (is.function(family)) family() else family)$family),
+               error = function(e) "user-supplied")
+    cat("== h2gam run ==\n")
+    cat(sprintf("  h2gam %s | mgcv %s | %s | %s\n", utils::packageVersion("h2gam"),
+                utils::packageVersion("mgcv"), R.version.string,
+                format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")))
+    cat(sprintf("  response: %s | offset: %s | family: %s\n", show(response), show(offset), fam))
+    cat(sprintf("  candidates (%d): %s\n", length(candidates), show(candidates)))
+    cat(sprintf("  structural: %s\n", show(structural)))
+    cat(sprintf("  knots: %s\n", if (is.null(knots)) "NULL" else
+      paste(sprintf("%s = c(%s)", names(knots), vapply(knots, show, "")), collapse = "; ")))
+    cat(sprintf("  concurvity_max = %s | spearman_pre = %s | na_max = %s\n",
+                show(concurvity_max), show(spearman_pre), show(na_max)))
+    cat(sprintf("  cv_k = %s | cv_scheme = %s | seed = %s\n", show(cv_k), show(cv_scheme[1]), show(seed)))
+    if (identical(cv_scheme[1], "spatial"))
+      cat(sprintf("  coords = %s | cv_metric = %s | cv_linkage = %s | cv_threshold = %s | cv_crs = %s\n",
+                  show(coords), show(cv_metric), show(cv_linkage), show(cv_threshold), show(cv_crs)))
+  }
+
+  if (!is.data.frame(data)) stop("`data` must be a data.frame.")
+  .need_cols(data, response, "response")
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
+  if (cv_scheme == "spatial") {            # fail before the family fits, not after
+    if (length(coords) != 2) stop("`coords` must name exactly two columns.")
+    .need_cols(data, coords, "coords")
+  }
+  if (response %in% candidates)
+    stop(sprintf("the response '%s' is also listed in `candidates`.", response))
+  if (anyDuplicated(candidates)) {
+    warning(sprintf("duplicate candidates dropped: %s.",
+                    paste(unique(candidates[duplicated(candidates)]), collapse = ", ")),
+            call. = FALSE)
+    candidates <- unique(candidates)
+  }
+  if (!length(structural)) structural <- "1"   # nothing forced in: intercept-only baseline
   if (!is.null(offset)) {
     if (!offset %in% names(data)) stop(sprintf("offset column '%s' not found in data.", offset))
     if (any(data[[offset]] <= 0, na.rm = TRUE))
       stop(sprintf("offset column '%s' must be > 0 (it enters as log(%s)).", offset, offset))
   }
 
-  # random-effect structural terms -> excluded from held-out CV prediction
-  re_terms  <- structural[grepl("bs\\s*=\\s*['\"]re['\"]", structural)]
-  re_vars   <- sub("^\\s*s\\(\\s*([A-Za-z0-9_.]+).*", "\\1", re_terms)
-  re_labels <- if (length(re_vars)) paste0("s(", re_vars, ")") else character()
-  # The held-out level remap in forward_select() needs a factor; on a numeric
-  # variable s(x, bs='re') is a penalised slope, not random intercepts, and the
-  # remap would turn every held-out prediction into NA.
-  for (v in re_vars) if (!v %in% names(data))
-    stop(sprintf("random-effect term s(%s, bs='re'): column '%s' not found in data.", v, v))
-  for (v in re_vars) if (!is.factor(data[[v]]))
-    stop(sprintf(paste0("random-effect term s(%s, bs='re') needs '%s' to be a factor ",
-                        "(numeric gives a penalised slope, not random intercepts); ",
-                        "convert it first, e.g. data$%s <- factor(data$%s)."), v, v, v, v))
+  # Random-effect structural terms are excluded from held-out CV prediction
+  # (see forward_select). They need a grouping factor: on numeric variables
+  # alone, s(x, bs='re') is a penalised slope, not random intercepts.
+  for (term in structural) {
+    spec <- tryCatch(eval(parse(text = term)[[1]], asNamespace("mgcv")),
+                     error = function(e) NULL)
+    if (!is_re_smooth(spec)) next
+    v <- spec$term
+    if (!all(v %in% names(data)))
+      stop(sprintf("random-effect term %s: column '%s' not found in data.",
+                   term, setdiff(v, names(data))[1]))
+    if (!any(vapply(data[v], is.factor, logical(1))))
+      stop(sprintf(paste0("random-effect term %s needs %s to be a factor ",
+                          "(numeric gives a penalised slope, not random intercepts); ",
+                          "convert it first, e.g. data$%s <- factor(data$%s)."),
+                   term, paste0("'", v, "'", collapse = " or "), v[1], v[1]))
+  }
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
-  # Optional run log: tee all console output to outdir/logfile. All progress
-  # output is verbose-gated, so there is nothing to capture unless verbose.
-  # on.exit guarantees the sink is popped even if the run errors, so a failure
-  # never leaves the console redirected; split = TRUE keeps the console echo.
-  do_log <- !is.null(logfile) && isTRUE(verbose)
-  if (do_log) {
-    sink(file.path(outdir, logfile), split = TRUE)
-    on.exit(sink(), add = TRUE)
-  }
+  do_log <- !is.null(logfile) && isTRUE(verbose)   # the caller holds the sink
 
   # -- family --------------------------------------------------------------
   if (identical(family, "auto")) {
@@ -831,11 +1064,17 @@ select_gam_covariates <- function(
       cat(sprintf("-> chosen: %s%s\n", fs$chosen, if (squeeze) " (SV squeeze)" else "")) }
   } else {
     family_gen <- if (is.function(family)) function() family() else family_object_gen(family)
-    squeeze <- FALSE; fs <- list(chosen = "user", table = NULL, fit = NULL,
-                                 profile = profile_response(data[[response]]))
+    squeeze <- FALSE; fs <- list(chosen = "user", table = NULL, fit = NULL)
+    # A free shape parameter needs a structural-only fit to fix it for the search.
+    if (isTRUE(family_gen()$n.theta > 0)) {
+      off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
+      form0 <- stats::as.formula(paste(response, "~", paste(c(structural, off_term), collapse = " + ")))
+      fs$fit <- tryCatch(gam(form0, data = data, family = family_gen(), method = "REML",
+                             knots = knots), error = function(e) NULL)
+    }
   }
-  # fast fixed-shape family for the search; free family for the final fit
-  select_gen <- make_select_gen(fs$chosen, family_gen, fs$fit)
+  # fixed-shape family for the search; free family for the final fit
+  select_gen <- make_select_gen(family_gen, fs$fit)
 
   # -- univariate screen ---------------------------------------------------
   scr <- univariate_screen(data, candidates, na_max = na_max)
@@ -850,12 +1089,36 @@ select_gam_covariates <- function(
   # complete-case on the comparison columns so every CV model sees the same rows.
   # The offset is included: an NA offset gives NA held-out predictions, which
   # would silently void every CV fold.
-  need <- c(response, coords, scr$keep, offset,
-            all.vars(stats::as.formula(paste("~", paste(structural, collapse = "+")))))
-  need <- intersect(need, names(data))
-  finite_ok <- vapply(data[need], function(x) !is.numeric(x) | is.finite(x),
-                      logical(nrow(data)))                   # complete.cases keeps Inf
-  data <- data[stats::complete.cases(data[, need]) & rowSums(!finite_ok) == 0, ]
+  # The supplied data is kept: the final fit only needs the kept covariates, so
+  # it gets back the rows that a sparse, unselected candidate cost the search.
+  usable <- function(vars) {
+    vars <- intersect(vars, names(full_data))
+    finite_ok <- vapply(full_data[vars], function(x) !is.numeric(x) | is.finite(x),
+                        logical(nrow(full_data)))            # complete.cases keeps Inf
+    stats::complete.cases(full_data[, vars]) & rowSums(!finite_ok) == 0
+  }
+  full_data  <- data
+  model_vars <- c(response, offset,
+                  all.vars(stats::as.formula(paste("~", paste(structural, collapse = "+")))))
+  data <- full_data[usable(c(model_vars, coords, scr$keep)), ]
+  if (verbose) cat(sprintf("  search rows: %d of %d (complete for every screened-in candidate)\n",
+                           nrow(data), nrow(full_data)))
+  # Which candidates cost those rows: each one's incomplete rows among the rows
+  # otherwise usable. A candidate costs them whether or not it is selected.
+  base_ok <- usable(c(model_vars, coords))
+  cost <- vapply(scr$keep, function(v) sum(base_ok & !usable(v)), numeric(1))
+  cost <- sort(cost[cost > 0], decreasing = TRUE)
+  if (length(cost)) {
+    cost_txt <- paste(sprintf("%s %d", names(cost), cost), collapse = ", ")
+    if (verbose) cat("  rows lost to missing values in:", cost_txt, "\n")
+    lost <- sum(base_ok) - nrow(data)
+    if (lost > 0.10 * sum(base_ok))
+      warning(sprintf(paste0("the search lost %d of %d rows (%.0f%%) to missing values in the ",
+                             "candidates (rows each: %s). Every model in the search loses them, ",
+                             "whether or not the candidate is selected; drop a candidate from ",
+                             "`candidates`, or lower `na_max`, to keep its rows."),
+                      lost, sum(base_ok), 100 * lost / sum(base_ok), cost_txt), call. = FALSE)
+  }
 
   # SV squeeze applied HERE so the search sees the same (0,1) response as the
   # final fit -- raw 0/1 values give non-finite beta deviance in the CV scoring.
@@ -877,17 +1140,41 @@ select_gam_covariates <- function(
   if (verbose) cat("\n== Forward selection (CV-scored, concurvity-gated) ==\n")
   fw <- forward_select(data, search_resp, scr$keep, structural, select_gen,
                        folds, knots, concurvity_max = concurvity_max,
-                       offset = offset, re_vars = re_vars, re_labels = re_labels,
+                       offset = offset,
                        verbose = verbose)
 
   # -- backward re-check ---------------------------------------------------
-  if (verbose) cat("\n== Backward re-check (BIC) ==\n")
-  kept <- backward_recheck(data, search_resp, fw$accepted, structural, select_gen,
-                           knots, offset = offset, verbose = verbose)
+  if (verbose) cat("\n== Backward re-check (CV) ==\n")
+  bw   <- backward_recheck(fw, verbose = verbose)
+  kept <- bw$kept
 
   # -- final fit + adequacy ------------------------------------------------
-  model <- final_fit(data, response, kept, structural, family_gen, knots,
+  final_data <- full_data[usable(c(model_vars, kept)), ]
+  if (verbose && nrow(final_data) != nrow(data))
+    cat(sprintf("\n== Final fit ==\n  %d rows (complete for the kept covariates; the search used %d)\n",
+                nrow(final_data), nrow(data)))
+  model <- final_fit(final_data, response, kept, structural, family_gen, knots,
                      offset = offset, squeeze = squeeze)
+
+  # -- what was gained, and whether the final model is adequate -------------
+  # Held-out deviance of the kept set against the structural-only model, on
+  # the search fits and folds. The covariates were chosen on these folds, so
+  # this is an optimistic guide, not an independent test.
+  kept_dev <- bw$dev
+  by_fold <- data.frame(fold = sort(unique(folds)), n = as.vector(table(folds)),
+                        structural = fw$base_dev, selected = kept_dev,
+                        gain = fold_gain(fw$base_dev, kept_dev))
+  ok   <- is.finite(by_fold$gain)
+  gain <- by_fold$gain[ok]
+  cv <- list(structural = mean(fw$base_dev[ok]), selected = mean(kept_dev[ok]),
+             gain = mean(gain), se = stats::sd(gain) / sqrt(length(gain)), folds = sum(ok),
+             # per fold, so a fold the models predict very differently is visible
+             by_fold = by_fold)
+  # The family table's dispersion / resid_ks_p describe the structural-only
+  # model; these are the same two measures on the model actually returned.
+  final_check <- list(
+    dispersion = sum(residuals(model, type = "pearson")^2) / model$df.residual,
+    resid_ks_p = dharma_ks(model))
 
   # -- decision table ------------------------------------------------------
   edf <- {
@@ -900,6 +1187,8 @@ select_gam_covariates <- function(
     spearman_cluster= clusters[candidates],
     entry_step      = NA_integer_,
     concurvity      = NA_real_,
+    cv_gain         = NA_real_,
+    cv_se           = NA_real_,
     status          = NA_character_,
     reason          = NA_character_,
     final_edf       = NA_real_,
@@ -908,27 +1197,45 @@ select_gam_covariates <- function(
   # screened-out
   decision$status[match(scr$dropped, decision$covariate)] <- "dropped"
   decision$reason[match(scr$dropped, decision$covariate)] <- scr$reason[scr$dropped]
+  # CV score behind each decision: the last time the candidate was scored,
+  # overridden below by the step at which it was accepted or concurvity-rejected
+  if (!is.null(fw$scores)) {
+    ms <- match(fw$scores$var, decision$covariate)
+    decision$cv_gain[ms] <- fw$scores$cv_gain; decision$cv_se[ms] <- fw$scores$cv_se
+  }
   # forward path
   if (!is.null(fw$path)) {
     acc <- fw$path[fw$path$action == "accept", ]
     rej <- fw$path[fw$path$action == "reject-concurvity", ]
     mi <- match(acc$var, decision$covariate)
     decision$entry_step[mi] <- acc$step; decision$concurvity[mi] <- acc$concurvity
+    decision$cv_gain[mi] <- acc$cv_gain; decision$cv_se[mi] <- acc$cv_se
     mr <- match(rej$var, decision$covariate)
-    decision$status[mr] <- "dropped"; decision$reason[mr] <- "concurvity"
+    decision$status[mr] <- "dropped"
+    decision$reason[mr] <- ifelse(is.na(rej$concurvity), "concurvity check failed", "concurvity")
     decision$concurvity[mr] <- rej$concurvity
+    decision$cv_gain[mr] <- rej$cv_gain; decision$cv_se[mr] <- rej$cv_se
   }
   # backward drops vs final kept
   fwd_acc <- if (!is.null(fw$path)) fw$path$var[fw$path$action == "accept"] else character()
   back_dropped <- setdiff(fwd_acc, kept)
   decision$status[match(back_dropped, decision$covariate)] <- "dropped"
-  decision$reason[match(back_dropped, decision$covariate)] <- "backward-BIC"
+  decision$reason[match(back_dropped, decision$covariate)] <- "backward-CV"
+  if (!is.null(bw$dropped)) {                       # the score that dropped it
+    mb <- match(bw$dropped$var, decision$covariate)
+    decision$cv_gain[mb] <- bw$dropped$cv_gain; decision$cv_se[mb] <- bw$dropped$cv_se
+  }
   ki <- match(kept, decision$covariate)
   decision$status[ki] <- "kept"; decision$reason[ki] <- "selected"
   decision$final_edf[ki] <- edf[kept]
-  # anything still unlabelled = screened-in but never entered
-  decision$status[is.na(decision$status)] <- "dropped"
-  decision$reason[is.na(decision$reason)] <- "no CV improvement"
+  # anything still unlabelled = screened-in but never entered; say why, in the
+  # order the forward loop tests it
+  un <- is.na(decision$status)
+  g  <- decision$cv_gain[un]; se <- decision$cv_se[un]
+  decision$reason[un] <- ifelse(is.finite(g) & g <= 0, "no CV improvement",
+                         ifelse(is.finite(g) & is.finite(se), "CV gain below 1 SE",
+                                "CV scoring failed"))
+  decision$status[un] <- "dropped"
 
   utils::write.csv(decision, file.path(outdir, "covariate_decision_table.csv"), row.names = FALSE)
 
@@ -944,8 +1251,11 @@ select_gam_covariates <- function(
   # all.terms = TRUE hands parametric terms to termplot(), which evaluates
   # model$call$data (the symbol `data`) in the formula's environment -- the
   # global env, where `data` is utils::data. Give a plot-only copy the frame.
-  pmodel <- model; pmodel$call$data <- data
+  pmodel <- model; pmodel$call$data <- final_data
+  # A plot failure (e.g. an intercept-only model has no terms to plot) must not
+  # cost the caller the finished selection: put the message in the PNG instead.
   tryCatch(plot(pmodel, pages = 1, scale = 0, all.terms = TRUE, shade = TRUE),
+           error = function(e) { graphics::plot.new(); graphics::title(conditionMessage(e)) },
            finally = grDevices::dev.off())
 
   final_formula <- paste(deparse(formula(model)), collapse = " ")
@@ -955,6 +1265,18 @@ select_gam_covariates <- function(
     cat("\n== Result ==\n")
     cat("kept:", if (length(kept)) paste(kept, collapse = ", ") else "(none)", "\n")
     cat(sprintf("deviance explained: %.1f%%\n", 100 * dev_expl))
+    cat(sprintf(paste0("held-out deviance (mean of %d folds): structural only %.4f, with kept ",
+                       "covariates %.4f\n  CV gain (mean log deviance ratio) %.4f (se %.4f): ",
+                       "a typical fold's deviance falls by %.0f%%\n"),
+                cv$folds, cv$structural, cv$selected, cv$gain, cv$se,
+                100 * (1 - exp(-cv$gain))))
+    cat("  (scored on the folds used for selection: an optimistic guide, not an independent test)\n")
+    cat("  by fold (n = held-out rows):\n")
+    print(format(cv$by_fold, digits = 4), row.names = FALSE)
+    cat(sprintf("final model adequacy: dispersion %.3f, residual uniformity p = %s\n",
+                final_check$dispersion,
+                if (is.na(final_check$resid_ks_p)) "NA (needs DHARMa)" else
+                  format.pval(final_check$resid_ks_p, digits = 3)))
     cat("formula:", final_formula, "\n")
     cat("outputs ->", normalizePath(outdir), "\n")
 
@@ -967,6 +1289,6 @@ select_gam_covariates <- function(
 
   invisible(list(model = model, kept = kept, family = fs$chosen,
                  decision = decision, path = fw$path, formula = final_formula,
-                 dev_expl = dev_expl, folds = folds,
+                 dev_expl = dev_expl, cv = cv, final_check = final_check, folds = folds,
                  logfile = if (do_log) file.path(outdir, logfile) else NULL))
 }

@@ -2,6 +2,8 @@ name: CI
 on:
   pull_request:
     branches: [dev, main]
+permissions:
+  contents: read
 jobs:
   commit-lint:
     name: commit-lint
@@ -30,14 +32,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate branch name
+        # The branch name is attacker-controlled on a PR. Pass it through the
+        # environment: a ${{ }} expression is pasted into the script text
+        # before the shell runs, so a name containing a quote would execute.
+        env:
+          branch: ${{ github.head_ref }}
         run: |
-          branch='${{ github.head_ref }}'
           if ! printf '%s' "$branch" | grep -Eq '^(feature|fix|docs|chore|perf|refactor)/.+'; then
             echo "::error::Branch '$branch' must start with feature/, fix/, docs/, chore/, perf/, or refactor/."; exit 1
           fi
   quality:
-    name: quality
-    runs-on: ubuntu-latest
+    # The Linux job keeps the plain name "quality": branch protection on dev
+    # and main requires a check with exactly that name.
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, name: quality}
+          - {os: windows-latest, name: quality (windows)}
+          - {os: macos-latest, name: quality (macos)}
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes

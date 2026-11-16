@@ -81,3 +81,21 @@ test_that("make_spatial_folds maps legacy 'ward' to ward.D2 (sklearn Ward)", {
   expect_no_message(f_ward <- fold("ward"))   # no hclust "renamed to ward.D" message
   expect_identical(f_ward, fold("ward.D2"))
 })
+
+test_that("make_spatial_folds and select_gam_covariates share a default linkage", {
+  expect_identical(formals(make_spatial_folds)$linkage,
+                   formals(select_gam_covariates)$cv_linkage)
+
+  set.seed(5)
+  n  <- 150
+  df <- data.frame(x = runif(n, 0, 5e5), y = runif(n, 0, 5e5),
+                   lon = runif(n, -20, -5), lat = runif(n, 35, 50),
+                   x1 = rnorm(n), z = rnorm(n))
+  # euclidean: the default is Ward
+  eu <- function(...) make_spatial_folds(df, "z", candidates = "x1", k = 3, coords = c("x", "y"),
+                                         metric = "euclidean", verbose = FALSE, ...)
+  expect_identical(eu(), eu(linkage = "ward.D2"))
+  # haversine: Ward is invalid, so the default still clusters with average linkage
+  hv <- function(...) make_spatial_folds(df, "z", candidates = "x1", k = 3, verbose = FALSE, ...)
+  expect_identical(hv(), hv(linkage = "average"))
+})

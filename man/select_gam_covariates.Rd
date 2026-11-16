@@ -22,7 +22,7 @@ select_gam_covariates(
   cv_linkage = "ward.D2",
   knots = NULL,
   offset = NULL,
-  outdir = ".",
+  outdir = tempdir(),
   logfile = "covariate_selection_log.txt",
   seed = 1,
   verbose = TRUE
@@ -38,17 +38,24 @@ covariates, and any variables used by \code{structural} / \code{offset}.}
 the model as a \verb{s(<name>)} smooth.}
 
 \item{structural}{Character vector of mgcv terms forced into every model
-and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}.}
+and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}. May be
+\code{character()} for an intercept-only baseline.}
 
 \item{coords}{Length-2 character vector naming the longitude and latitude
 columns, used for spatial folds and complete-case filtering.}
 
 \item{family}{\code{"auto"} (default) profiles the response and takes the
-lowest-AIC candidate that fits on the structural-only model. The reported
+lowest-AIC candidate that fits on the structural-only model. Candidates
+are limited to families whose AIC is comparable on the response: Poisson
+and negative binomial for counts, squeezed beta alone for proportions
+with exact 0/1. Tweedie is not auto-suggested for either (its density
+cannot be ranked against count probabilities or a squeezed response);
+pass \code{family = tw} to use it. The reported
 \code{dispersion} and \code{resid_ks_p} columns are diagnostics to inspect, not
 inputs to the choice. Both are measured before covariate selection, so a
 low \code{resid_ks_p} reflects not-yet-modelled covariates and structure as much
-as the family -- re-check it on the final fit before acting on it.
+as the family -- compare it with \code{final_check} in the result, which
+reports both measures for the final model.
 Alternatively a family object (e.g. \code{nb()}) or a zero-argument family
 generator (e.g. \code{nb}) to skip the suggestion step. For a family object
 with an estimated shape parameter, theta is reset to its supplied value
@@ -57,14 +64,20 @@ the constructor instead to leave your object untouched.}
 
 \item{concurvity_max}{Reject a candidate whose worst pairwise concurvity
 against the already-accepted covariate smooths exceeds this (structural
-terms excluded from the gate).}
+terms excluded from the gate). A candidate whose concurvity cannot be
+computed is rejected with a warning.}
 
 \item{spearman_pre}{\verb{|Spearman rho|} threshold for the correlation clusters
 reported in the decision table (annotation only; the concurvity gate does
 the actual removal).}
 
 \item{na_max}{Drop candidates whose NA/non-finite fraction exceeds this in
-the univariate screen.}
+the univariate screen. The search runs on the rows complete for every
+candidate that passes, so each CV model sees the same data; a sparse
+candidate therefore costs the search rows even if it is not selected. The
+log lists the rows each candidate costs, and a warning names them when
+together they cost more than 10\% of the rows. The final model is refitted
+on all rows complete for the kept covariates.}
 
 \item{cv_k}{Number of CV folds.}
 
@@ -97,16 +110,21 @@ fit. Mainly the cyclic boundary for \code{s(month, bs='cc')}: pass
 instead of collapsing months 1 and 12 onto the same knot. \code{NULL} lets
 mgcv place knots automatically; entries for absent variables are ignored.}
 
-\item{offset}{Name of an effort column; adds \verb{offset(log(<offset>))} to
+\item{offset}{Name of an exposure column (must be positive); adds \verb{offset(log(<offset>))} to
 every fit (including family suggestion, so AIC stays comparable).}
 
 \item{outdir}{Directory for the decision-table CSV, diagnostic PNGs, and the
-run log (created if absent).}
+run log (created if absent). Defaults to the session's temporary
+directory, which R deletes when the session ends: pass a path to keep
+the files.}
 
 \item{logfile}{Filename (within \code{outdir}) for a run log that captures all
-the console output; \code{NULL} disables it. Only written when \code{verbose = TRUE}
-(there is nothing to capture otherwise). The sink is unwound on exit, so an
-error mid-run still restores the console.}
+the console output (which opens with a header giving the h2gam, mgcv and
+R versions and the model and CV settings of the run), plus warnings, messages and the error that stopped a
+failed run (each distinct text once, where it first occurred); \code{NULL}
+disables it. Only written when \code{verbose = TRUE} (there is nothing to
+capture otherwise). The sink is unwound on exit, so an error mid-run
+still restores the console.}
 
 \item{seed}{Random seed for fold construction.}
 
@@ -115,11 +133,50 @@ the final model summary.}
 }
 \value{
 (Invisibly) a list: \code{model} (the final mgcv gam), \code{kept} (selected
-covariate names), \code{family} (chosen family label), \code{decision} (per-candidate
-decision table, also written to \code{covariate_decision_table.csv}), \code{path}
-(forward-selection steps), \code{formula} (final formula as a string),
-\code{dev_expl} (deviance explained), \code{folds} (integer fold vector), and
+covariate names), \code{family} (chosen family label; \code{"user"} when a family
+was supplied), \code{decision} (per-candidate
+decision table, also written to \code{covariate_decision_table.csv}; see
+below), \code{path}
+(forward-selection steps: one row per acceptance or concurvity rejection,
+with \code{step}, \code{var}, \code{action}, \code{concurvity}, \code{cv_gain} and \code{cv_se}; \code{NULL}
+when there were none), \code{formula} (final formula as a string),
+\code{dev_expl} (deviance explained), \code{cv} and \code{final_check} (see below), \code{folds} (integer fold vector, one per row used in the search), and
 \code{logfile} (path to the run log, or \code{NULL} if none was written).
+
+The \code{decision} table has one row per candidate. \code{cv_gain} and \code{cv_se}
+are the CV gain from adding the candidate and its standard error. The
+gain is the mean over folds of the log ratio of held-out deviance
+without the candidate to held-out deviance with it, so each fold counts
+by its proportional improvement and a single badly predicted fold cannot
+set the scale; \code{1 - exp(-cv_gain)} is the typical proportional fall in
+a fold's deviance. They are taken at the step that decided its fate:
+the step it was accepted or rejected for concurvity, the backward
+re-check that dropped it, otherwise the last step it was scored.
+\code{reason} is one of \code{"selected"}; \code{"concurvity"};
+\code{"concurvity check failed"} (concurvity could not be computed, so the
+candidate was rejected; a warning names it);
+\code{"backward-CV"} (accepted, but with the later covariates in the model
+its CV gain over the set without it was no longer at least one standard
+error); \code{"no CV improvement"} (gain <= 0); \code{"CV gain below 1 SE"} (positive gain smaller than its standard error); \code{"CV scoring failed"} (the fits or held-out predictions failed on too many folds); or
+the univariate-screen reason (\code{"absent"}, \code{"non-numeric"}, \code{"NA <n>\%"},
+\code{"zero variance"}), for which the CV columns are \code{NA}.
+
+\code{cv} summarises what the kept covariates buy out of fold: \code{structural}
+and \code{selected} are the mean held-out deviance of the structural-only
+model and of the model with the kept covariates, \code{gain} and \code{se} the CV
+gain of the second over the first (mean per-fold log deviance ratio, as
+\code{cv_gain} above) and its standard error, and \code{folds} the
+number of folds scored. \code{by_fold} is a data frame with the same three
+scores for each fold and its number of held-out rows (\code{NA} where a fold
+could not be scored); check it for a fold either model predicts far
+worse than the others, which the means hide. It uses the search fits on the folds the
+covariates were selected on, so it is an optimistic guide, not an
+independent test.
+
+\code{final_check} holds \code{dispersion} (Pearson) and \code{resid_ks_p} (DHARMa
+residual uniformity; \code{NA} without DHARMa) for the final model. The
+family table reports the same two measures for the structural-only
+model, before any covariate is in.
 
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
 \code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png},
@@ -134,20 +191,30 @@ positive / gaussian branches), ranked by AIC alone;
 scored by cross-validated held-out deviance (spatial-block or
 response-stratified folds), with a concurvity gate and a 1-SE stopping
 rule;
-\item runs a backward elimination re-check (BIC), a final \code{select = TRUE}
+\item runs a backward elimination re-check (each accepted covariate must still
+pass the same CV rule against all the others), a final \code{select = TRUE}
 shrinkage fit, and adequacy diagnostics.
 }
 }
 \details{
-Every threshold is a logged, overridable argument; nothing is hardcoded to
-a particular dataset. Structural (spatial/temporal) terms are forced in and
-not screened -- covariates must earn their place over and above them.
-Random-effect structural terms (\code{bs = "re"}) are excluded from held-out CV
-prediction, matching a deployment \code{predict(..., exclude = ...)}.
+Every threshold is an overridable argument. The defaults for \code{structural}
+and \code{coords} assume columns named \code{month}, \code{year}, \code{lon} and \code{lat}; set
+them to match your data. Structural (spatial/temporal) terms are forced in
+and not screened -- covariates must earn their place over and above them.
+Random-effect structural terms are excluded from held-out CV prediction,
+matching a deployment \code{predict(..., exclude = ...)}. That covers every
+\code{bs = "re"} form (random intercepts, random slopes such as
+\code{s(group, x1, bs = "re")}, \verb{by =} variables), factor-smooth interactions
+(\code{bs = "fs"}), and tensor terms with an \code{"re"} margin. Each needs a factor
+grouping variable.
 
 Search fits use \code{mgcv::bam(discrete = TRUE)} with the family shape
-parameter (Tweedie p / negbin theta) fixed at its structural-only estimate
-for speed; the final fit is a free \code{mgcv::gam(method = "REML")}.
+parameter (negbin theta, Tweedie p, beta precision, scaled-t df and scale)
+fixed at its structural-only estimate, whether the family was auto-suggested
+or supplied. This keeps held-out deviance comparable between candidate
+models and is much faster. Other families with an estimated shape parameter
+(e.g. \code{ocat()}, \code{ziP()}) cannot be fixed this way and give a warning. The
+final fit is a free \code{mgcv::gam(method = "REML")}.
 }
 \examples{
 \donttest{

@@ -6,7 +6,7 @@
 \alias{h2gam-package}
 \title{h2gam: Automated GAM Covariate Validation and Selection for 'mgcv'}
 \description{
-Given a response and a pool of candidate covariates, profiles the response and auto-suggests an 'mgcv' family (count / proportion / positive / gaussian branches, ranked by AIC), forward-selects a decorrelated, prediction-relevant covariate subset scored by spatial-block or response-stratified cross-validation with a concurvity gate and a one-standard-error stopping rule, then runs a backward elimination re-check (BIC) and a final shrinkage fit with adequacy diagnostics. Structural (spatial/temporal) terms are forced in and not screened, so covariates must earn their place over and above them.
+Given a response and a pool of candidate covariates, profiles the response and auto-suggests an 'mgcv' family (count / proportion / positive / gaussian branches, ranked by AIC), forward-selects a decorrelated, prediction-relevant covariate subset scored by spatial-block or response-stratified cross-validation with a concurvity gate and a one-standard-error stopping rule, then runs a backward elimination re-check (by the same cross-validated rule) and a final shrinkage fit with adequacy diagnostics. Structural (spatial/temporal) terms are forced in and not screened, so covariates must earn their place over and above them.
 }
 \seealso{
 Useful links:
