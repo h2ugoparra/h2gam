@@ -110,7 +110,7 @@ fit. Mainly the cyclic boundary for \code{s(month, bs='cc')}: pass
 instead of collapsing months 1 and 12 onto the same knot. \code{NULL} lets
 mgcv place knots automatically; entries for absent variables are ignored.}
 
-\item{offset}{Name of an effort column; adds \verb{offset(log(<offset>))} to
+\item{offset}{Name of an exposure column (must be positive); adds \verb{offset(log(<offset>))} to
 every fit (including family suggestion, so AIC stays comparable).}
 
 \item{outdir}{Directory for the decision-table CSV, diagnostic PNGs, and the
@@ -204,7 +204,7 @@ and not screened -- covariates must earn their place over and above them.
 Random-effect structural terms are excluded from held-out CV prediction,
 matching a deployment \code{predict(..., exclude = ...)}. That covers every
 \code{bs = "re"} form (random intercepts, random slopes such as
-\code{s(vessel, sst, bs = "re")}, \verb{by =} variables), factor-smooth interactions
+\code{s(group, x1, bs = "re")}, \verb{by =} variables), factor-smooth interactions
 (\code{bs = "fs"}), and tensor terms with an \code{"re"} margin. Each needs a factor
 grouping variable.
 

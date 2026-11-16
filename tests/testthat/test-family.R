@@ -5,16 +5,16 @@ test_that("select_gam_covariates recovers true drivers and a count family", {
   df <- data.frame(
     lon    = runif(n, -20, -5),
     lat    = runif(n,  35,  50),
-    sst    = rnorm(n),
+    x1    = rnorm(n),
     noise1 = rnorm(n)
   )
-  eta      <- 1 + 0.6 * sin(df$lon / 4) + 0.8 * sin(df$sst)
-  df$catch <- rnbinom(n, mu = exp(eta), size = 2)
+  eta      <- 1 + 0.6 * sin(df$lon / 4) + 0.8 * sin(df$x1)
+  df$count <- rnbinom(n, mu = exp(eta), size = 2)
 
   res <- select_gam_covariates(
     data       = df,
-    response   = "catch",
-    candidates = c("sst", "noise1"),
+    response   = "count",
+    candidates = c("x1", "noise1"),
     structural = "te(lon, lat)",
     cv_k       = 3,
     cv_metric  = "haversine",
@@ -22,7 +22,7 @@ test_that("select_gam_covariates recovers true drivers and a count family", {
     verbose    = FALSE
   )
 
-  expect_true("sst" %in% res$kept)          # real driver kept
+  expect_true("x1" %in% res$kept)          # real driver kept
   expect_false("noise1" %in% res$kept)      # pure noise dropped
   expect_match(res$family, "nb|poisson")    # non-negative count family
   expect_s3_class(res$model, "gam")
@@ -57,13 +57,13 @@ test_that("a user-supplied shape family still selects the real driver", {
   set.seed(11)
   n  <- 300
   df <- data.frame(lon = runif(n, -20, -5), lat = runif(n, 35, 50),
-                   sst = rnorm(n), noise = rnorm(n))
-  df$catch <- rnbinom(n, mu = exp(1 + 0.8 * sin(2 * df$sst)), size = 3)
+                   x1 = rnorm(n), noise = rnorm(n))
+  df$count <- rnbinom(n, mu = exp(1 + 0.8 * sin(2 * df$x1)), size = 3)
   for (fam in list(nb, nb(), tw)) {
-    res <- select_gam_covariates(df, "catch", c("sst", "noise"), structural = "te(lon, lat)",
+    res <- select_gam_covariates(df, "count", c("x1", "noise"), structural = "te(lon, lat)",
                                  family = fam, cv_k = 3, cv_scheme = "stratified",
                                  outdir = tempdir(), logfile = NULL, verbose = FALSE)
-    expect_identical(res$kept, "sst")
+    expect_identical(res$kept, "x1")
   }
 })
 

@@ -29,9 +29,9 @@ df$year <- factor(df$year)   # random-effect terms (bs = 're') need a factor
 res <- select_gam_covariates(
   data       = df,
   response   = "my_target",
-  candidates = c("sst", "chl", "mld", ...),
+  candidates = c("x1", "x2", "x3", ...),
   structural = c("s(year, bs='re')", "te(lon, lat)"),
-  offset     = "nhooks",
+  offset     = "exposure",
   cv_k       = 5,
   outdir     = "output/my_target"
 )

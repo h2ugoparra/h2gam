@@ -49,10 +49,10 @@ family_candidates <- function(p) {
   if (p$binary) {
     # ---- presence/absence ----
     # logit is the conventional default, but cloglog is the mechanistically
-    # consistent link for effort-offset longline data: with offset(log(nhooks)),
-    #   cloglog(p) = log(nhooks) + f  <=>  p = 1 - exp(-nhooks * exp(f)),
-    # i.e. the probability of >=1 catch under a Poisson encounter rate ~ hooks
-    # (the presence analogue of the log-link count model). probit is included as
+    # consistent link when there is an exposure offset: with offset(log(exposure)),
+    #   cloglog(p) = log(exposure) + f  <=>  p = 1 - exp(-exposure * exp(f)),
+    # i.e. the probability of >=1 event under a Poisson rate proportional to
+    # the exposure (the presence analogue of the log-link count model). probit is included as
     # a cheap symmetric alternative. AIC is comparable across links here (same
     # response and likelihood), and AIC alone is what picks among them.
     add("binomial_logit",   function() binomial(link = "logit"))
@@ -127,8 +127,8 @@ suggest_family <- function(data, response, structural, knots, offset = NULL) {
   fits  <- list()
 
   # Rank families on the SAME offset model the pipeline deploys. This matters for
-  # the binomial cloglog candidate (its log(nhooks) offset is what gives it the
-  # "P(>=1 catch)" meaning) and keeps AIC comparable to the search/final fits.
+  # the binomial cloglog candidate (its log(exposure) offset is what gives it the
+  # "P(>=1 event)" meaning) and keeps AIC comparable to the search/final fits.
   off_term <- if (!is.null(offset)) sprintf("offset(log(%s))", offset) else NULL
 
   for (nm in names(cands)) {
@@ -766,7 +766,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #' Random-effect structural terms are excluded from held-out CV prediction,
 #' matching a deployment `predict(..., exclude = ...)`. That covers every
 #' `bs = "re"` form (random intercepts, random slopes such as
-#' `s(vessel, sst, bs = "re")`, `by =` variables), factor-smooth interactions
+#' `s(group, x1, bs = "re")`, `by =` variables), factor-smooth interactions
 #' (`bs = "fs"`), and tensor terms with an `"re"` margin. Each needs a factor
 #' grouping variable.
 #'
@@ -843,7 +843,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
 #'   instead of collapsing months 1 and 12 onto the same knot. `NULL` lets
 #'   mgcv place knots automatically; entries for absent variables are ignored.
-#' @param offset Name of an effort column; adds `offset(log(<offset>))` to
+#' @param offset Name of an exposure column (must be positive); adds `offset(log(<offset>))` to
 #'   every fit (including family suggestion, so AIC stays comparable).
 #' @param outdir Directory for the decision-table CSV, diagnostic PNGs, and the
 #'   run log (created if absent). Defaults to the session's temporary
