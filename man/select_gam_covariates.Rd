@@ -107,7 +107,7 @@ downgraded to \code{"average"} for haversine). See \code{\link[=make_spatial_fol
 
 \item{cv_folds}{Name of a column of \code{data} holding your own fold ids, one
 fold per distinct value; \code{NULL} (default) builds the folds from
-\code{cv_scheme}. Use it to keep rows of one sampling unit (a trip, a set)
+\code{cv_scheme}. Use it to keep rows of one sampling unit (repeated measurements of a site, say)
 in the same fold, or to block in space and time: the built-in folds do
 neither. When given, \code{cv_k}, \code{cv_scheme} and the other \verb{cv_*} arguments
 are ignored and the \code{coords} columns need not exist. The column must

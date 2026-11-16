@@ -839,7 +839,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   downgraded to `"average"` for haversine). See [make_spatial_folds()].
 #' @param cv_folds Name of a column of `data` holding your own fold ids, one
 #'   fold per distinct value; `NULL` (default) builds the folds from
-#'   `cv_scheme`. Use it to keep rows of one sampling unit (a trip, a set)
+#'   `cv_scheme`. Use it to keep rows of one sampling unit (repeated measurements of a site, say)
 #'   in the same fold, or to block in space and time: the built-in folds do
 #'   neither. When given, `cv_k`, `cv_scheme` and the other `cv_*` arguments
 #'   are ignored and the `coords` columns need not exist. The column must

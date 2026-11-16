@@ -106,12 +106,12 @@ test_that("cv_folds uses the caller's fold column instead of building folds", {
   n  <- 240
   df <- data.frame(lon = runif(n), lat = runif(n), x1 = rnorm(n), x2 = rnorm(n))
   df$y    <- sin(2 * df$x1) + rnorm(n, sd = 0.3)
-  df$trip <- sample(rep(c("c", "a", "d", "b"), each = n / 4))
+  df$block <- sample(rep(c("c", "a", "d", "b"), each = n / 4))
   # coords name no column: they are not needed with user folds
   res <- select_gam_covariates(df, "y", c("x1", "x2"), structural = "te(lon, lat)",
-                               coords = c("nope", "nope2"), cv_folds = "trip",
+                               coords = c("nope", "nope2"), cv_folds = "block",
                                outdir = tempdir(), logfile = NULL, verbose = FALSE)
-  expect_identical(res$folds, match(df$trip, c("a", "b", "c", "d")))
+  expect_identical(res$folds, match(df$block, c("a", "b", "c", "d")))
   expect_identical(res$cv$by_fold$fold, 1:4)
   expect_true("x1" %in% res$kept)
 })

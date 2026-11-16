@@ -5,7 +5,7 @@
 * `select_gam_covariates()` gains `cv_folds`: the name of a column of `data`
   holding your own fold ids, used instead of the spatial or stratified
   folds. The built-in folds are spatial only, so rows of one sampling unit
-  (a trip, a set, a vessel-day) can fall in different folds, and nothing
+  (repeated measurements of a site, say) can fall in different folds, and nothing
   separates folds in time. With your own column you can keep such units
   together or block in space and time. `cv_k`, `cv_scheme` and the other
   `cv_*` arguments are ignored when it is set, and `coords` need not exist.
