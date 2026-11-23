@@ -20,6 +20,7 @@ select_gam_covariates(
   cv_crs = NULL,
   cv_threshold = NULL,
   cv_linkage = "ward.D2",
+  cv_folds = NULL,
   knots = NULL,
   offset = NULL,
   outdir = tempdir(),
@@ -42,7 +43,8 @@ and never screened, e.g. \code{c("s(year, bs='re')", "te(lon, lat)")}. May be
 \code{character()} for an intercept-only baseline.}
 
 \item{coords}{Length-2 character vector naming the longitude and latitude
-columns, used for spatial folds and complete-case filtering.}
+columns, used for spatial folds, complete-case filtering, and the
+residual spatial autocorrelation check in \code{final_check}.}
 
 \item{family}{\code{"auto"} (default) profiles the response and takes the
 lowest-AIC candidate that fits on the structural-only model. Candidates
@@ -79,9 +81,9 @@ log lists the rows each candidate costs, and a warning names them when
 together they cost more than 10\% of the rows. The final model is refitted
 on all rows complete for the kept covariates.}
 
-\item{cv_k}{Number of CV folds.}
+\item{cv_k}{Number of CV folds. Ignored when \code{cv_folds} is given.}
 
-\item{cv_scheme}{Fold construction: \code{"spatial"} (SPCV, the default; see
+\item{cv_scheme}{Fold construction when \code{cv_folds} is not given: \code{"spatial"} (SPCV, the default; see
 \code{\link[=make_spatial_folds]{make_spatial_folds()}}) or \code{"stratified"} (non-spatial k-fold stratified
 on the response; see \code{\link[=make_stratified_folds]{make_stratified_folds()}}). Use \code{"stratified"} for
 low-prevalence (e.g. binomial presence/absence) targets where spatial
@@ -103,6 +105,15 @@ pairwise distances).}
 
 \item{cv_linkage}{SPCV AHC linkage (\code{"ward.D2"} default; Ward variants are
 downgraded to \code{"average"} for haversine). See \code{\link[=make_spatial_folds]{make_spatial_folds()}}.}
+
+\item{cv_folds}{Name of a column of \code{data} holding your own fold ids, one
+fold per distinct value; \code{NULL} (default) builds the folds from
+\code{cv_scheme}. Use it to keep rows of one sampling unit (repeated measurements of a site, say)
+in the same fold, or to block in space and time: the built-in folds do
+neither. When given, \code{cv_k}, \code{cv_scheme} and the other \verb{cv_*} arguments
+are ignored and the \code{coords} columns need not exist. The column must
+have no missing values. In the result, folds are numbered in the sorted
+order of its values.}
 
 \item{knots}{mgcv per-smooth knot positions, passed to every \code{gam()}/\code{bam()}
 fit. Mainly the cyclic boundary for \code{s(month, bs='cc')}: pass
@@ -140,7 +151,7 @@ below), \code{path}
 (forward-selection steps: one row per acceptance or concurvity rejection,
 with \code{step}, \code{var}, \code{action}, \code{concurvity}, \code{cv_gain} and \code{cv_se}; \code{NULL}
 when there were none), \code{formula} (final formula as a string),
-\code{dev_expl} (deviance explained), \code{cv} and \code{final_check} (see below), \code{folds} (integer fold vector, one per row used in the search), and
+\code{dev_expl} (deviance explained), \code{cv}, \code{final_check} and \code{resid_map} (see below), \code{folds} (integer fold vector, one per row used in the search), and
 \code{logfile} (path to the run log, or \code{NULL} if none was written).
 
 The \code{decision} table has one row per candidate. \code{cv_gain} and \code{cv_se}
@@ -176,10 +187,32 @@ independent test.
 \code{final_check} holds \code{dispersion} (Pearson) and \code{resid_ks_p} (DHARMa
 residual uniformity; \code{NA} without DHARMa) for the final model. The
 family table reports the same two measures for the structural-only
-model, before any covariate is in.
+model, before any covariate is in. \code{resid_moran_i} and \code{resid_moran_p}
+are Moran's I of those residuals over the \code{coords} locations and its
+p-value (DHARMa's spatial autocorrelation test, on distances in
+\code{cv_metric}; residuals of rows sharing a location are aggregated). A
+positive I with a small p-value means the final model leaves spatial
+structure unexplained, so its standard errors and p-values are too
+optimistic; the cross-validated selection does not depend on them. With
+many locations even a negligible I is significant, so read the size of I
+as well. Both are \code{NA} without DHARMa, when the \code{coords} columns are
+absent or have missing values in the final-fit rows, or above 10,000
+distinct locations (the test needs their full distance matrix).
+
+\code{resid_map} is the data behind that test and behind
+\code{residual_map.png}: a data frame with one row per distinct location (the
+two \code{coords} columns), \code{n} (rows at that location) and \code{resid}, the final
+model's DHARMa scaled residual there (0 to 1; 0.5 is as predicted, near 1
+the observations are higher than predicted, near 0 lower). Without DHARMa
+\code{resid} is the mean deviance residual instead (0 is as predicted);
+\code{attr(resid_map, "type")} says which. On the map a patch of one colour is
+spatial structure the model has not explained. \code{NULL}, and no map, when
+the \code{coords} columns are absent or have missing values in the final-fit
+rows. Use it to draw the residuals over your own base map.
 
 Side effects in \code{outdir}: \code{covariate_decision_table.csv},
 \code{selection_diagnostics.png} (gam.check panels), \code{partial_effects.png},
+\code{residual_map.png} (when \code{resid_map} is available),
 and (unless disabled) the run log named by \code{logfile}.
 }
 \description{

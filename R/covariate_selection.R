@@ -103,16 +103,88 @@ sv_squeeze <- function(y) {
   (y * (n - 1) + 0.5) / n
 }
 
-# DHARMa uniformity p-value (NA if the family can't be simulated).
-dharma_ks <- function(m) {
-  if (!requireNamespace("DHARMa", quietly = TRUE)) return(NA_real_)
+# DHARMa simulated residuals (NULL without DHARMa, or if the family can't be
+# simulated).
+dharma_sim <- function(m) {
+  if (!requireNamespace("DHARMa", quietly = TRUE)) return(NULL)
   # suppressMessages: DHARMa message()s an "install mgcViz" notice on every gam
   # simulation when mgcViz is absent, which would break verbose = FALSE.
-  out <- tryCatch(suppressMessages({
-    sim <- DHARMa::simulateResiduals(m, n = 250, plot = FALSE)
-    DHARMa::testUniformity(sim, plot = FALSE)$p.value
-  }), error = function(e) NA_real_)
-  out
+  tryCatch(suppressMessages(DHARMa::simulateResiduals(m, n = 250, plot = FALSE)),
+           error = function(e) NULL)
+}
+
+# DHARMa uniformity p-value (NA when there are no simulated residuals).
+dharma_ks <- function(m, sim = dharma_sim(m)) {
+  if (is.null(sim)) return(NA_real_)
+  tryCatch(suppressMessages(DHARMa::testUniformity(sim, plot = FALSE)$p.value),
+           error = function(e) NA_real_)
+}
+
+# Above this many distinct locations Moran's I is skipped: it needs their full
+# pairwise distance matrix (8 * n^2 bytes, several copies of it inside the test).
+moran_max_locations <- 10000
+
+# The final model's residuals, one row per location (x, y): the DHARMa scaled
+# residual (0..1, 0.5 = as expected; rows sharing a location are aggregated by
+# DHARMa), or the mean deviance residual when there are no simulated residuals.
+# `sim` in the result is aligned with the table's rows. NULL without usable
+# coordinates.
+resid_by_location <- function(model, sim, x, y) {
+  r <- residuals(model, type = "deviance")
+  if (is.null(x) || is.null(y) || length(x) != length(r) ||
+      !all(is.finite(x) & is.finite(y))) return(NULL)
+  g   <- factor(paste(x, y))
+  dup <- nlevels(g) < length(g)
+  # aggregated residuals come back in level order; otherwise keep the row order
+  u <- if (dup) { w <- which(!duplicated(g)); w[order(g[w])] } else seq_along(g)
+  if (!is.null(sim) && dup)
+    sim <- tryCatch(suppressMessages(DHARMa::recalculateResiduals(sim, group = g)),
+                    error = function(e) NULL)
+  lev <- as.integer(g[u])
+  list(sim = sim,
+       type = if (is.null(sim)) "deviance" else "DHARMa scaled",
+       table = data.frame(x = x[u], y = y[u], n = tabulate(as.integer(g))[lev],
+                          resid = if (is.null(sim)) as.vector(tapply(r, g, mean))[lev] else
+                            sim$scaledResiduals))
+}
+
+# Moran's I of DHARMa residuals `sim` at the distinct locations (x, y), and its
+# p-value; NA when it cannot be computed. Distances follow the CV metric:
+# great-circle for "haversine", else planar (reprojected when `crs` is given).
+dharma_moran <- function(sim, x, y, metric = "haversine", crs = NULL) {
+  na <- list(i = NA_real_, p = NA_real_)
+  if (is.null(sim) || length(x) < 3 || length(x) > moran_max_locations) return(na)
+  tryCatch(suppressMessages({
+    d <- if (metric == "haversine") .haversine_dist(y, x) else {
+      xy <- cbind(x, y)
+      if (!is.null(crs)) xy <- sf::sf_project(from = "+proj=longlat +datum=WGS84", to = crs, pts = xy)
+      as.matrix(stats::dist(xy))
+    }
+    t <- DHARMa::testSpatialAutocorrelation(sim, distMat = d, plot = FALSE)
+    list(i = unname(t$statistic["observed"]), p = t$p.value)
+  }), error = function(e) na)
+}
+
+# Map of the per-location residuals (`loc` from resid_by_location): blue where
+# the model predicts too high, red where too low, grey where as expected. A
+# patch of one colour is spatial structure the model has not explained.
+plot_resid_map <- function(loc, labs, lonlat) {
+  t   <- loc$table
+  mid <- if (loc$type == "deviance") 0 else 0.5
+  lim <- if (loc$type == "deviance") max(abs(t$resid), 1e-8) else 0.5
+  pal <- grDevices::colorRampPalette(c("#2166ac", "#f0efec", "#b2182b"))(11)
+  col <- pal[cut(t$resid, seq(mid - lim, mid + lim, length.out = 12), include.lowest = TRUE)]
+  o   <- order(abs(t$resid - mid))                    # largest misfit drawn last
+  # lon/lat degrees: stretch so both axes are in the same ground distance
+  asp <- if (lonlat) 1 / cos(mean(range(t$y)) * pi / 180) else 1
+  graphics::par(mar = c(7, 4, 3, 1))                  # room for the legend below the axis
+  graphics::plot(t$x[o], t$y[o], asp = asp, pch = 21, bg = col[o], col = "grey45", lwd = 0.4,
+                 cex = max(0.6, min(1.6, 30 / sqrt(nrow(t)))), xlab = labs[1], ylab = labs[2],
+                 main = sprintf("Final model residuals by location (%s)", loc$type))
+  graphics::legend("bottom", inset = c(0, -0.2), xpd = TRUE, horiz = TRUE, bty = "n",
+                   pch = 21, pt.bg = pal[c(1, 6, 11)], col = "grey45", pt.cex = 1.5,
+                   legend = c("observed lower than predicted", "as predicted",
+                              "observed higher than predicted"))
 }
 
 # Fit each candidate family on the structural-only model, rank by AIC (ok
@@ -786,7 +858,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   and never screened, e.g. `c("s(year, bs='re')", "te(lon, lat)")`. May be
 #'   `character()` for an intercept-only baseline.
 #' @param coords Length-2 character vector naming the longitude and latitude
-#'   columns, used for spatial folds and complete-case filtering.
+#'   columns, used for spatial folds, complete-case filtering, and the
+#'   residual spatial autocorrelation check in `final_check`.
 #' @param family `"auto"` (default) profiles the response and takes the
 #'   lowest-AIC candidate that fits on the structural-only model. Candidates
 #'   are limited to families whose AIC is comparable on the response: Poisson
@@ -818,8 +891,8 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   log lists the rows each candidate costs, and a warning names them when
 #'   together they cost more than 10% of the rows. The final model is refitted
 #'   on all rows complete for the kept covariates.
-#' @param cv_k Number of CV folds.
-#' @param cv_scheme Fold construction: `"spatial"` (SPCV, the default; see
+#' @param cv_k Number of CV folds. Ignored when `cv_folds` is given.
+#' @param cv_scheme Fold construction when `cv_folds` is not given: `"spatial"` (SPCV, the default; see
 #'   [make_spatial_folds()]) or `"stratified"` (non-spatial k-fold stratified
 #'   on the response; see [make_stratified_folds()]). Use `"stratified"` for
 #'   low-prevalence (e.g. binomial presence/absence) targets where spatial
@@ -837,6 +910,14 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   pairwise distances).
 #' @param cv_linkage SPCV AHC linkage (`"ward.D2"` default; Ward variants are
 #'   downgraded to `"average"` for haversine). See [make_spatial_folds()].
+#' @param cv_folds Name of a column of `data` holding your own fold ids, one
+#'   fold per distinct value; `NULL` (default) builds the folds from
+#'   `cv_scheme`. Use it to keep rows of one sampling unit (repeated measurements of a site, say)
+#'   in the same fold, or to block in space and time: the built-in folds do
+#'   neither. When given, `cv_k`, `cv_scheme` and the other `cv_*` arguments
+#'   are ignored and the `coords` columns need not exist. The column must
+#'   have no missing values. In the result, folds are numbered in the sorted
+#'   order of its values.
 #' @param knots mgcv per-smooth knot positions, passed to every `gam()`/`bam()`
 #'   fit. Mainly the cyclic boundary for `s(month, bs='cc')`: pass
 #'   `list(month = c(0.5, 12.5))` so the 12-month cycle wraps (Dec to Jan)
@@ -867,7 +948,7 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   (forward-selection steps: one row per acceptance or concurvity rejection,
 #'   with `step`, `var`, `action`, `concurvity`, `cv_gain` and `cv_se`; `NULL`
 #'   when there were none), `formula` (final formula as a string),
-#'   `dev_expl` (deviance explained), `cv` and `final_check` (see below), `folds` (integer fold vector, one per row used in the search), and
+#'   `dev_expl` (deviance explained), `cv`, `final_check` and `resid_map` (see below), `folds` (integer fold vector, one per row used in the search), and
 #'   `logfile` (path to the run log, or `NULL` if none was written).
 #'
 #'   The `decision` table has one row per candidate. `cv_gain` and `cv_se`
@@ -905,10 +986,32 @@ final_fit <- function(data, response, accepted, structural, family_gen, knots,
 #'   `final_check` holds `dispersion` (Pearson) and `resid_ks_p` (DHARMa
 #'   residual uniformity; `NA` without DHARMa) for the final model. The
 #'   family table reports the same two measures for the structural-only
-#'   model, before any covariate is in.
+#'   model, before any covariate is in. `resid_moran_i` and `resid_moran_p`
+#'   are Moran's I of those residuals over the `coords` locations and its
+#'   p-value (DHARMa's spatial autocorrelation test, on distances in
+#'   `cv_metric`; residuals of rows sharing a location are aggregated). A
+#'   positive I with a small p-value means the final model leaves spatial
+#'   structure unexplained, so its standard errors and p-values are too
+#'   optimistic; the cross-validated selection does not depend on them. With
+#'   many locations even a negligible I is significant, so read the size of I
+#'   as well. Both are `NA` without DHARMa, when the `coords` columns are
+#'   absent or have missing values in the final-fit rows, or above 10,000
+#'   distinct locations (the test needs their full distance matrix).
+#'
+#'   `resid_map` is the data behind that test and behind
+#'   `residual_map.png`: a data frame with one row per distinct location (the
+#'   two `coords` columns), `n` (rows at that location) and `resid`, the final
+#'   model's DHARMa scaled residual there (0 to 1; 0.5 is as predicted, near 1
+#'   the observations are higher than predicted, near 0 lower). Without DHARMa
+#'   `resid` is the mean deviance residual instead (0 is as predicted);
+#'   `attr(resid_map, "type")` says which. On the map a patch of one colour is
+#'   spatial structure the model has not explained. `NULL`, and no map, when
+#'   the `coords` columns are absent or have missing values in the final-fit
+#'   rows. Use it to draw the residuals over your own base map.
 #'
 #'   Side effects in `outdir`: `covariate_decision_table.csv`,
 #'   `selection_diagnostics.png` (gam.check panels), `partial_effects.png`,
+#'   `residual_map.png` (when `resid_map` is available),
 #'   and (unless disabled) the run log named by `logfile`.
 #'
 #' @examples
@@ -945,6 +1048,7 @@ select_gam_covariates <- function(
     cv_crs         = NULL,
     cv_threshold   = NULL,
     cv_linkage     = "ward.D2",
+    cv_folds       = NULL,
     knots          = NULL,
     offset         = NULL,
     outdir         = tempdir(),
@@ -955,7 +1059,7 @@ select_gam_covariates <- function(
   run <- function() select_covariates_impl(
     data, response, candidates, structural, coords, family, concurvity_max,
     spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
-    cv_linkage, knots, offset, outdir, logfile, seed, verbose)
+    cv_linkage, cv_folds, knots, offset, outdir, logfile, seed, verbose)
   # All progress output is verbose-gated: nothing to log unless verbose.
   if (is.null(logfile) || !isTRUE(verbose)) return(invisible(run()))
 
@@ -987,7 +1091,7 @@ select_gam_covariates <- function(
 select_covariates_impl <- function(
     data, response, candidates, structural, coords, family, concurvity_max,
     spearman_pre, na_max, cv_k, cv_scheme, cv_metric, cv_crs, cv_threshold,
-    cv_linkage, knots, offset, outdir, logfile, seed, verbose) {
+    cv_linkage, cv_folds, knots, offset, outdir, logfile, seed, verbose) {
 
   # Run header, before anything can fail: the versions and the settings, so
   # a log shows which code and thresholds produced it.
@@ -1007,8 +1111,12 @@ select_covariates_impl <- function(
       paste(sprintf("%s = c(%s)", names(knots), vapply(knots, show, "")), collapse = "; ")))
     cat(sprintf("  concurvity_max = %s | spearman_pre = %s | na_max = %s\n",
                 show(concurvity_max), show(spearman_pre), show(na_max)))
-    cat(sprintf("  cv_k = %s | cv_scheme = %s | seed = %s\n", show(cv_k), show(cv_scheme[1]), show(seed)))
-    if (identical(cv_scheme[1], "spatial"))
+    if (!is.null(cv_folds)) {
+      cat(sprintf("  cv_folds = %s (user-supplied folds)\n", show(cv_folds)))
+    } else {
+      cat(sprintf("  cv_k = %s | cv_scheme = %s | seed = %s\n", show(cv_k), show(cv_scheme[1]), show(seed)))
+    }
+    if (is.null(cv_folds) && identical(cv_scheme[1], "spatial"))
       cat(sprintf("  coords = %s | cv_metric = %s | cv_linkage = %s | cv_threshold = %s | cv_crs = %s\n",
                   show(coords), show(cv_metric), show(cv_linkage), show(cv_threshold), show(cv_crs)))
   }
@@ -1016,7 +1124,13 @@ select_covariates_impl <- function(
   if (!is.data.frame(data)) stop("`data` must be a data.frame.")
   .need_cols(data, response, "response")
   cv_scheme <- match.arg(cv_scheme, c("spatial", "stratified"))
-  if (cv_scheme == "spatial") {            # fail before the family fits, not after
+  if (!is.null(cv_folds)) {
+    if (!is.character(cv_folds) || length(cv_folds) != 1)
+      stop("`cv_folds` must be the name of one column of `data`.")
+    .need_cols(data, cv_folds, "cv_folds")
+    if (anyNA(data[[cv_folds]]))
+      stop(sprintf("cv_folds column '%s' has missing values.", cv_folds))
+  } else if (cv_scheme == "spatial") {     # fail before the family fits, not after
     if (length(coords) != 2) stop("`coords` must name exactly two columns.")
     .need_cols(data, coords, "coords")
   }
@@ -1127,8 +1241,18 @@ select_covariates_impl <- function(
 
   clusters <- spearman_clusters(data, scr$keep, thr = spearman_pre)
   if (verbose) cat(sprintf("\n== %s folds ==\n",
-                   if (cv_scheme == "stratified") "Stratified k-fold" else "Spatial (SPCV)"))
-  folds    <- if (cv_scheme == "stratified") {
+                   if (!is.null(cv_folds)) "User-supplied" else
+                     if (cv_scheme == "stratified") "Stratified k-fold" else "Spatial (SPCV)"))
+  folds    <- if (!is.null(cv_folds)) {
+    f  <- data[[cv_folds]]
+    id <- match(f, sort(unique(f)))        # 1..k in the sorted order of the values
+    if (max(id) < 2)
+      stop(sprintf("cv_folds column '%s' has fewer than 2 folds among the rows used in the search.",
+                   cv_folds))
+    if (verbose) cat(sprintf("  column '%s': %d folds (sizes %s)\n", cv_folds, max(id),
+                             paste(tabulate(id), collapse = "/")))
+    id
+  } else if (cv_scheme == "stratified") {
     make_stratified_folds(data, response, k = cv_k, seed = seed, verbose = verbose)
   } else {
     make_spatial_folds(data, response, scr$keep, coords = coords, k = cv_k,
@@ -1172,9 +1296,16 @@ select_covariates_impl <- function(
              by_fold = by_fold)
   # The family table's dispersion / resid_ks_p describe the structural-only
   # model; these are the same two measures on the model actually returned.
+  # Moran's I asks what neither of them does: whether the residuals are still
+  # spatially autocorrelated once the structural terms and covariates are in.
+  sim   <- dharma_sim(model)
+  loc   <- if (length(coords) == 2 && all(coords %in% names(final_data)))
+    resid_by_location(model, sim, final_data[[coords[1]]], final_data[[coords[2]]])
+  moran <- dharma_moran(loc$sim, loc$table$x, loc$table$y, cv_metric, cv_crs)
   final_check <- list(
     dispersion = sum(residuals(model, type = "pearson")^2) / model$df.residual,
-    resid_ks_p = dharma_ks(model))
+    resid_ks_p = dharma_ks(model, sim),
+    resid_moran_i = moran$i, resid_moran_p = moran$p)
 
   # -- decision table ------------------------------------------------------
   edf <- {
@@ -1258,6 +1389,17 @@ select_covariates_impl <- function(
            error = function(e) { graphics::plot.new(); graphics::title(conditionMessage(e)) },
            finally = grDevices::dev.off())
 
+  # Where the residuals are: the map behind the Moran's I above.
+  resid_map <- NULL
+  if (!is.null(loc)) {
+    resid_map <- stats::setNames(loc$table, c(coords, "n", "resid"))
+    attr(resid_map, "type") <- loc$type
+    grDevices::png(file.path(outdir, "residual_map.png"), width = 1400, height = 1100, res = 130)
+    tryCatch(plot_resid_map(loc, coords, lonlat = cv_metric == "haversine" || !is.null(cv_crs)),
+             error = function(e) { graphics::plot.new(); graphics::title(conditionMessage(e)) },
+             finally = grDevices::dev.off())
+  }
+
   final_formula <- paste(deparse(formula(model)), collapse = " ")
   dev_expl <- summary(model)$dev.expl
 
@@ -1277,6 +1419,10 @@ select_covariates_impl <- function(
                 final_check$dispersion,
                 if (is.na(final_check$resid_ks_p)) "NA (needs DHARMa)" else
                   format.pval(final_check$resid_ks_p, digits = 3)))
+    cat(sprintf("residual spatial autocorrelation: %s\n",
+                if (is.na(final_check$resid_moran_p)) "NA (needs DHARMa and the coords columns)" else
+                  sprintf("Moran's I = %.3f, p = %s", final_check$resid_moran_i,
+                          format.pval(final_check$resid_moran_p, digits = 3))))
     cat("formula:", final_formula, "\n")
     cat("outputs ->", normalizePath(outdir), "\n")
 
@@ -1289,6 +1435,7 @@ select_covariates_impl <- function(
 
   invisible(list(model = model, kept = kept, family = fs$chosen,
                  decision = decision, path = fw$path, formula = final_formula,
-                 dev_expl = dev_expl, cv = cv, final_check = final_check, folds = folds,
+                 dev_expl = dev_expl, cv = cv, final_check = final_check,
+                 resid_map = resid_map, folds = folds,
                  logfile = if (do_log) file.path(outdir, logfile) else NULL))
 }

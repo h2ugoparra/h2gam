@@ -99,3 +99,31 @@ test_that("make_spatial_folds and select_gam_covariates share a default linkage"
   hv <- function(...) make_spatial_folds(df, "z", candidates = "x1", k = 3, verbose = FALSE, ...)
   expect_identical(hv(), hv(linkage = "average"))
 })
+
+test_that("cv_folds uses the caller's fold column instead of building folds", {
+  skip_on_cran()
+  set.seed(3)
+  n  <- 240
+  df <- data.frame(lon = runif(n), lat = runif(n), x1 = rnorm(n), x2 = rnorm(n))
+  df$y    <- sin(2 * df$x1) + rnorm(n, sd = 0.3)
+  df$block <- sample(rep(c("c", "a", "d", "b"), each = n / 4))
+  # coords name no column: they are not needed with user folds
+  res <- select_gam_covariates(df, "y", c("x1", "x2"), structural = "te(lon, lat)",
+                               coords = c("nope", "nope2"), cv_folds = "block",
+                               outdir = tempdir(), logfile = NULL, verbose = FALSE)
+  expect_identical(res$folds, match(df$block, c("a", "b", "c", "d")))
+  expect_identical(res$cv$by_fold$fold, 1:4)
+  expect_true("x1" %in% res$kept)
+})
+
+test_that("an unusable cv_folds column is rejected up front", {
+  df <- data.frame(lon = runif(30), lat = runif(30), x1 = rnorm(30), y = rnorm(30),
+                   one = 1, f = rep(c(1, NA, 3), 10))
+  go <- function(...) select_gam_covariates(df, "y", "x1", structural = "te(lon, lat)",
+                                            outdir = tempdir(), logfile = NULL,
+                                            verbose = FALSE, ...)
+  expect_error(go(cv_folds = "absent"), "cv_folds column(s) not found", fixed = TRUE)
+  expect_error(go(cv_folds = "f"), "missing values")
+  expect_error(go(cv_folds = c("f", "one")), "name of one column")
+  expect_error(go(cv_folds = "one"), "fewer than 2 folds")
+})

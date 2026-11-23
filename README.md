@@ -5,7 +5,7 @@ Automated GAM covariate validation & selection for [mgcv](https://cran.r-project
 Given a response and a pool of candidate covariates, `select_gam_covariates()`:
 
 1. **Profiles the response** and auto-suggests a family (count / proportion / positive / gaussian branches), ranked by AIC. Only families whose AIC is comparable are ranked against each other, so Tweedie is not auto-suggested for counts or for proportions with exact 0/1; pass `family = tw` to use it. Dispersion and a DHARMa residual-uniformity p-value are reported alongside for you to inspect, but do not affect the choice — and since both are measured on the structural-only model, a low `resid_ks_p` reflects not-yet-modelled covariates and structure as much as the family. The result's `final_check` reports both measures for the final model; compare the two before acting on it.
-2. **Forward-selects** a decorrelated, prediction-relevant covariate subset, scored by random/spatial-block CV skill, with a concurvity gate and a 1-SE stopping rule. The CV gain is the mean per-fold log ratio of held-out deviances, so each fold counts by its proportional improvement and one badly predicted fold cannot decide the search. Fold construction is set by `cv_scheme`: `"spatial"` (block CV, the default) or `"stratified"` — random k-fold stratified on the response, for binomial / low-prevalence targets where spatial blocks would leave folds with too few positives.
+2. **Forward-selects** a decorrelated, prediction-relevant covariate subset, scored by random/spatial-block CV skill, with a concurvity gate and a 1-SE stopping rule. The CV gain is the mean per-fold log ratio of held-out deviances, so each fold counts by its proportional improvement and one badly predicted fold cannot decide the search. Fold construction is set by `cv_scheme`: `"spatial"` (block CV, the default) or `"stratified"` — random k-fold stratified on the response, for binomial / low-prevalence targets where spatial blocks would leave folds with too few positives. Or pass your own folds as a column of the data with `cv_folds`, to keep the rows of a sampling unit (repeated measurements of a site, say) in one fold or to block in space and time; the built-in folds do neither.
 3. Runs a **backward elimination re-check** (each accepted covariate must still pass the same CV rule with all the others in the model), a final `select=TRUE` shrinkage fit, and adequacy diagnostics.
 
 Every threshold is an overridable argument. The defaults for `structural` and `coords` assume columns named `month`, `year`, `lon` and `lat`; set them to match your data. Structural (spatial/temporal) terms are forced in and not screened — covariates must earn their place over and above them.
@@ -51,7 +51,7 @@ Each project keeps its own short driver script (data loading, preprocessing, tar
 ## Dependencies
 
 Required: `mgcv` (attached with the package).
-Optional (feature-gated via `Suggests`): `DHARMa` (the residual-uniformity p-value in the family table and in `final_check`; `NA` without it), `sf` (only when reprojecting lon/lat for the `euclidean` spatial-CV metric, i.e. when you pass `cv_crs`). The default `haversine` metric, and `euclidean` on already-projected coordinates, need neither.
+Optional (feature-gated via `Suggests`): `DHARMa` (the residual-uniformity p-value in the family table and in `final_check`, and the residual spatial autocorrelation test in `final_check`; `NA` without it), `sf` (only when reprojecting lon/lat for the `euclidean` spatial-CV metric, i.e. when you pass `cv_crs`). The default `haversine` metric, and `euclidean` on already-projected coordinates, need neither.
 
 ## Outputs
 
@@ -60,6 +60,7 @@ Written to `outdir` (by default the session's temporary directory, so set it to 
 - `covariate_decision_table.csv` — per-candidate accept/reject decisions with scores
 - `selection_diagnostics.png` — adequacy diagnostics of the final model
 - `partial_effects.png` — partial effect plots of the kept smooths
+- `residual_map.png` — the final model's residuals at each location; a patch of one colour is spatial structure the model has not explained
 - `covariate_selection_log.txt` — the run log: console output plus warnings, messages and the error that stopped a failed run (written when `verbose = TRUE`; rename or disable it with `logfile`)
 
-The returned list carries the fitted `mgcv` model, the kept covariate set, the chosen family, the decision table, the selection path, the final formula, deviance explained, the held-out deviance gained by the kept covariates (`cv`), the final model's dispersion and residual-uniformity check (`final_check`), the CV folds, and the path to the run log.
+The returned list carries the fitted `mgcv` model, the kept covariate set, the chosen family, the decision table, the selection path, the final formula, deviance explained, the held-out deviance gained by the kept covariates (`cv`), the final model's dispersion, residual-uniformity check and residual spatial autocorrelation (Moran's I) (`final_check`), the residuals by location behind the map (`resid_map`), the CV folds, and the path to the run log.

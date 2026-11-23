@@ -1,3 +1,30 @@
+# h2gam 0.5.0
+
+## New features
+
+* `select_gam_covariates()` gains `cv_folds`: the name of a column of `data`
+  holding your own fold ids, used instead of the spatial or stratified
+  folds. The built-in folds are spatial only, so rows of one sampling unit
+  (repeated measurements of a site, say) can fall in different folds, and nothing
+  separates folds in time. With your own column you can keep such units
+  together or block in space and time. `cv_k`, `cv_scheme` and the other
+  `cv_*` arguments are ignored when it is set, and `coords` need not exist.
+* `final_check` gains `resid_moran_i` and `resid_moran_p`, also printed in
+  the result section: Moran's I of the final model's DHARMa residuals over
+  the `coords` locations, and its p-value. The spatial folds guard the
+  selection against spatial autocorrelation, but nothing reported whether
+  the final model still leaves spatial structure in its residuals, in which
+  case its standard errors and p-values are too optimistic. Both are `NA`
+  without DHARMa, without usable `coords` columns, or above 10,000 distinct
+  locations.
+* A new output, `residual_map.png`, maps the final model's residuals at
+  each location, and the result gains `resid_map`, the data behind it (one
+  row per location: the coordinates, the number of rows there, and the
+  residual). Moran's I says whether spatial structure is left; the map
+  shows where. Residuals are DHARMa scaled residuals, or mean deviance
+  residuals without DHARMa. Not produced when the `coords` columns are
+  absent.
+
 # h2gam 0.4.0
 
 ## Breaking changes
